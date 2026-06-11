@@ -1,0 +1,1022 @@
+
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>基于 LangGraph 的半导体文档自演化知识系统设计报告（架构与代码分离版）</title>
+<style>
+    :root{
+      --bg:#f5f7fb;
+      --paper:#ffffff;
+      --ink:#172033;
+      --muted:#5d6b82;
+      --line:#dfe5ef;
+      --brand:#3157d5;
+      --brand2:#6c4fd3;
+      --soft:#eef3ff;
+      --green:#14865f;
+      --green-soft:#eaf8f2;
+      --amber:#a86b00;
+      --amber-soft:#fff6df;
+      --red:#b84242;
+      --red-soft:#fff0f0;
+      --code:#101724;
+      --shadow:0 10px 30px rgba(35,52,92,.08);
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;
+      background:var(--bg);
+      color:var(--ink);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Arial,sans-serif;
+      line-height:1.72;
+    }
+    a{color:var(--brand);text-decoration:none}
+    a:hover{text-decoration:underline}
+    .page{max-width:1220px;margin:0 auto;padding:28px 24px 72px}
+    .hero{
+      background:linear-gradient(135deg,#192a69 0%,#3157d5 52%,#7153d6 100%);
+      color:#fff;border-radius:24px;padding:52px 54px;box-shadow:var(--shadow);
+      position:relative;overflow:hidden;
+    }
+    .hero:before,.hero:after{
+      content:"";position:absolute;border-radius:50%;background:rgba(255,255,255,.08)
+    }
+    .hero:before{width:340px;height:340px;right:-90px;top:-150px}
+    .hero:after{width:220px;height:220px;right:170px;bottom:-140px}
+    .eyebrow{font-size:13px;letter-spacing:.14em;text-transform:uppercase;opacity:.78;font-weight:700}
+    h1{font-size:38px;line-height:1.25;margin:12px 0 18px;max-width:900px}
+    .subtitle{font-size:18px;max-width:920px;opacity:.92;margin:0}
+    .hero-meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:28px}
+    .pill{
+      display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;
+      background:rgba(255,255,255,.14);font-size:13px;border:1px solid rgba(255,255,255,.18)
+    }
+    .layout{display:grid;grid-template-columns:260px minmax(0,1fr);gap:26px;margin-top:26px}
+    .toc{
+      position:sticky;top:18px;align-self:start;background:var(--paper);
+      border:1px solid var(--line);border-radius:18px;padding:20px;box-shadow:var(--shadow);
+      max-height:calc(100vh - 36px);overflow:auto
+    }
+    .toc h3{margin:0 0 10px;font-size:15px}
+    .toc a{display:block;padding:7px 8px;border-radius:8px;color:#44516a;font-size:13px}
+    .toc a:hover{background:var(--soft);text-decoration:none;color:var(--brand)}
+    main{min-width:0}
+    section{
+      background:var(--paper);border:1px solid var(--line);border-radius:20px;
+      padding:34px 38px;margin-bottom:24px;box-shadow:var(--shadow)
+    }
+    h2{font-size:26px;margin:0 0 20px;line-height:1.35}
+    h3{font-size:19px;margin:28px 0 12px}
+    h4{font-size:16px;margin:22px 0 8px}
+    p{margin:10px 0;color:#2b3850}
+    .lead{font-size:17px;color:#25324a}
+    .callout{
+      border-left:4px solid var(--brand);background:var(--soft);
+      padding:16px 18px;border-radius:0 12px 12px 0;margin:18px 0
+    }
+    .callout strong{color:#203b9e}
+    .callout.green{border-color:var(--green);background:var(--green-soft)}
+    .callout.green strong{color:var(--green)}
+    .callout.amber{border-color:var(--amber);background:var(--amber-soft)}
+    .callout.red{border-color:var(--red);background:var(--red-soft)}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0}
+    .grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .card{
+      border:1px solid var(--line);border-radius:14px;padding:18px;background:#fbfcff
+    }
+    .card h4{margin:0 0 6px}
+    .small{font-size:13px;color:var(--muted)}
+    .tag{
+      display:inline-block;background:#edf1f8;border:1px solid #dce3ee;
+      color:#4b5870;border-radius:999px;padding:3px 8px;font-size:12px;margin:2px
+    }
+    .diagram{
+      margin:22px 0;border:1px solid var(--line);border-radius:16px;padding:22px;background:#f8faff;
+      overflow-x:auto
+    }
+    .flow{display:flex;align-items:stretch;gap:10px;min-width:860px}
+    .flow .box{
+      flex:1;min-width:135px;padding:14px;border-radius:12px;background:white;
+      border:1px solid #d9e1f0;text-align:center;font-size:13px;font-weight:700;
+      display:flex;align-items:center;justify-content:center
+    }
+    .flow .arrow{display:flex;align-items:center;color:#8190aa;font-size:24px}
+    .layers{display:grid;gap:12px;min-width:720px}
+    .layer{
+      border-radius:12px;padding:16px 18px;border:1px solid #d9e1f0;background:#fff
+    }
+    .layer b{display:block;margin-bottom:4px}
+    .layer.control{border-color:#8da5ff;background:#eef3ff}
+    .layer.agent{border-color:#b7a7ff;background:#f4f0ff}
+    .layer.validate{border-color:#8bd5bb;background:#edf9f4}
+    .layer.data{border-color:#edc67f;background:#fff8e9}
+    table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+    th,td{border:1px solid var(--line);padding:11px 12px;text-align:left;vertical-align:top}
+    th{background:#f1f4f9;color:#33425d}
+    tr:nth-child(even) td{background:#fbfcfe}
+    pre{
+      background:var(--code);color:#e8eef9;border-radius:14px;padding:18px;
+      overflow:auto;font-size:13px;line-height:1.55;border:1px solid #202b3e
+    }
+    code{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace}
+    :not(pre)>code{background:#eef1f6;padding:2px 6px;border-radius:6px;color:#26344c}
+    ul,ol{padding-left:22px}
+    li{margin:6px 0;color:#2b3850}
+    .kpi{font-size:25px;font-weight:800;color:var(--brand)}
+    .caption{font-size:12px;color:var(--muted);margin-top:8px}
+    .roadmap{display:grid;gap:14px}
+    .phase{
+      display:grid;grid-template-columns:110px 1fr;gap:18px;border:1px solid var(--line);
+      border-radius:14px;padding:18px;background:#fcfdff
+    }
+    .phase .label{font-weight:800;color:var(--brand)}
+    .risk-low{color:var(--green);font-weight:700}
+    .risk-mid{color:var(--amber);font-weight:700}
+    .risk-high{color:var(--red);font-weight:700}
+    .footer{color:var(--muted);font-size:12px;text-align:center;margin-top:28px}
+    @media(max-width:900px){
+      .layout{grid-template-columns:1fr}
+      .toc{position:relative;top:auto;max-height:none}
+      .grid,.grid.three{grid-template-columns:1fr}
+      .hero{padding:36px 28px}
+      h1{font-size:30px}
+      section{padding:26px 22px}
+    }
+    @media print{
+      body{background:white}
+      .page{max-width:none;padding:0}
+      .toc{display:none}
+      .layout{display:block}
+      .hero,section{box-shadow:none;break-inside:avoid}
+      a{color:inherit}
+    }
+  
+    .part-banner{background:linear-gradient(135deg,#eef3ff,#f6f3ff);border:1px solid #d9e1ff;border-radius:20px;padding:30px 34px;margin-bottom:24px;box-shadow:var(--shadow)}
+    .part-banner .num{font-size:12px;letter-spacing:.16em;font-weight:800;color:var(--brand)}
+    .part-banner h2{font-size:31px;margin:6px 0 10px}
+    .part-banner p{font-size:16px;margin:0;color:#40506c}
+    .toc .part{margin-top:14px;font-size:12px;color:var(--brand);font-weight:800;letter-spacing:.08em}
+</style>
+</head>
+<body>
+<div class="page">
+<header class="hero">
+<div class="eyebrow">Architecture &amp; Engineering Report</div>
+<h1>基于 LangGraph 的半导体文档自演化知识系统设计报告</h1>
+<p class="subtitle">报告分为两部分：第一部分说明整体思路、系统架构与治理机制；第二部分独立说明 LangGraph 代码架构、模块边界与实现骨架。</p>
+<div class="hero-meta"><span class="pill">Part I：思路与架构</span><span class="pill">Part II：代码与工程设计</span><span class="pill">LangGraph Graph API</span><span class="pill">Controlled Agent Harness</span></div>
+</header>
+<div class="layout">
+<nav class="toc"><h3>目录</h3><div class="part">总览</div><a href="#summary">1. 执行摘要</a><div class="part">PART I · 思路与架构</div><a href="#goal">2. 问题定义与系统目标</a><a href="#agent-driven">3. Agent 驱动机制</a><a href="#architecture">4. 总体系统架构</a><a href="#governance">5. 本体与知识治理</a><a href="#harness">6. 可控 Harness</a><a href="#storage">7. 数据与存储</a><a href="#deployment">8. 部署与运行模式</a><a href="#roadmap">9. 实施路线</a><a href="#metrics">10. 指标体系</a><a href="#conclusion">11. 架构结论</a><div class="part">PART II · 代码与工程设计</div><a href="#why-langgraph">12. LangGraph 技术选型</a><a href="#graph-design">13. 主图与子图</a><a href="#state">14. State 与契约</a><a href="#nodes">15. 节点与 Agent</a><a href="#code">16. 目录与代码骨架</a><a href="#testing">17. 测试与观测</a><a href="#references">参考资料</a></nav>
+<main><section id="summary">
+<h2>1. 执行摘要</h2>
+<p class="lead">该系统面向半导体领域文档，不依赖预先存在的用户问题，也不要求人工逐条标注。文档本身是驱动力：系统持续分析语料、提取知识、发现 Schema 缺口，并在受控条件下演化本体和图谱。</p>
+<div class="callout"><strong>核心边界：</strong>LangGraph 负责流程、状态与权限；Agent 负责语义判断；Validator 负责硬校验；Policy Engine 负责治理决策；Publisher 是唯一能写生产知识和生产 Schema 的组件。</div>
+<div class="grid three">
+<div class="card">
+<div class="kpi">1</div>
+<h4>单一状态真源</h4>
+<p class="small">LangGraph Checkpointer 保存执行状态，不再引入第二套工作流引擎。</p>
+</div>
+<div class="card">
+<div class="kpi">2</div>
+<h4>双循环</h4>
+<p class="small">知识生产循环与 Schema 演化循环分离，彼此反馈但不互相直接污染。</p>
+</div>
+<div class="card">
+<div class="kpi">3</div>
+<h4>三道门禁</h4>
+<p class="small">结构化校验、语义复核、Policy Engine 决策后才允许发布。</p>
+</div>
+</div>
+</section><div class="part-banner"><div class="num">PART I</div><h2>整体思路与系统架构</h2><p>聚焦系统为什么这样设计、Agent 如何驱动、各层如何协作，以及如何在自动化条件下保持可控。</p></div><section id="goal">
+<h2>2. 问题定义与系统目标</h2>
+<h3>2.1 要解决的问题</h3>
+<ul>
+<li>半导体文档数量持续增长，类型包含论文、专利、技术手册、标准、设备资料、故障记录和行业报告。</li>
+<li>不存在预先定义的用户问题，系统必须主动理解语料、发现主题和管理知识。</li>
+<li>不希望逐条人工标注实体、关系和本体，但需要长期保持一致性、可追溯性和可回滚性。</li>
+<li>半导体知识高度条件化，普通三元组难以表达工艺参数、材料、设备、环境和测量结果。</li>
+</ul>
+<h3>2.2 明确不采用的方式</h3>
+<div class="grid">
+<div class="card">
+<h4>不采用自由多 Agent 社会</h4>
+<p>不让多个 Agent 长期自主聊天、无限反思或自行修改生产图谱。</p>
+</div>
+<div class="card">
+<h4>不采用“LLM 一次生成完整本体”</h4>
+<p>本体从跨文档实例与关系模式中逐步归纳，并经过版本化治理。</p>
+</div>
+<div class="card">
+<h4>不将 Agent 作为数据库客户端</h4>
+<p>Agent 不获得任意 SQL、Cypher 或文件系统写权限，只调用白名单工具。</p>
+</div>
+<div class="card">
+<h4>不只存裸三元组</h4>
+<p>以 Claim、Condition、Measurement、Evidence 和 Provenance 为核心对象。</p>
+</div>
+</div>
+<h3>2.3 最小元模型</h3>
+<p>
+          无需人工定义全部半导体领域类，但建议固定一个小型 Meta-schema，保证不同批次输出可兼容：
+        </p>
+<p>
+<span class="tag">Document</span><span class="tag">Evidence</span><span class="tag">Mention</span>
+<span class="tag">Entity</span><span class="tag">Concept</span><span class="tag">Process</span>
+<span class="tag">Event</span><span class="tag">Claim</span><span class="tag">Condition</span>
+<span class="tag">Measurement</span><span class="tag">Relation</span><span class="tag">Attribute</span>
+</p>
+</section><section id="agent-driven">
+<h2>3. Agent 如何驱动系统</h2>
+<p>
+          这里的“Agent 驱动”不是由用户对话驱动，而是由文档和知识状态变化驱动。
+          Agent 的自主性体现在<strong>选择语义动作</strong>，而不是获得整个系统的控制权。
+        </p>
+<div class="diagram">
+<div class="flow">
+<div class="box">文档新增 / 更新</div><div class="arrow">→</div>
+<div class="box">LangGraph 创建运行</div><div class="arrow">→</div>
+<div class="box">Agent 判断文档与语义</div><div class="arrow">→</div>
+<div class="box">工具检索与候选生成</div><div class="arrow">→</div>
+<div class="box">验证与策略门禁</div><div class="arrow">→</div>
+<div class="box">候选积累 / 正式发布</div>
+</div>
+</div>
+<h3>4.1 三类驱动事件</h3>
+<div class="grid three">
+<div class="card">
+<h4>数据事件</h4>
+<p>新文档、版本变化、来源变更、删除或定时重处理。</p>
+</div>
+<div class="card">
+<h4>知识事件</h4>
+<p>无法归类术语、实体冲突、重复实体、新关系模式或证据矛盾。</p>
+</div>
+<div class="card">
+<h4>治理事件</h4>
+<p>Schema 候选达到阈值、类型膨胀、质量下降、模型或 Prompt 版本升级。</p>
+</div>
+</div>
+<h3>4.2 Agent 的有限动作空间</h3>
+<pre><code>AllowedAction = Literal[
+    "EXTRACT_SEMANTIC_ATOMS",
+    "LINK_EXISTING_ENTITY",
+    "CREATE_ENTITY_CANDIDATE",
+    "PROPOSE_TYPE",
+    "PROPOSE_RELATION",
+    "PROPOSE_ALIAS",
+    "PROPOSE_MERGE",
+    "PROPOSE_SPLIT",
+    "REQUEST_MORE_CONTEXT",
+    "MARK_CONFLICT",
+    "REJECT_CANDIDATE",
+    "ESCALATE"
+]</code></pre>
+<p>
+          Agent 不允许调用 <code>WRITE_PRODUCTION_GRAPH</code>、<code>PUBLISH_SCHEMA</code>、
+          <code>DELETE_PRODUCTION_DATA</code> 或 <code>MODIFY_POLICY</code>。
+        </p>
+</section><section id="architecture">
+<h2>4. 总体系统架构</h2>
+<div class="diagram">
+<div class="layers">
+<div class="layer control">
+<b>① Trigger &amp; Control Plane — LangGraph</b>
+              文档事件、线程 ID、运行状态、节点路由、检查点、预算、重试、interrupt、回放
+            </div>
+<div class="layer agent">
+<b>② Bounded Semantic Agents</b>
+              Corpus Analyst、Semantic Extractor、Entity Resolver、Schema Proposer、Semantic Critic
+            </div>
+<div class="layer validate">
+<b>③ Deterministic Validation &amp; Policy</b>
+              JSON/Pydantic、证据跨度、单位、逻辑循环、Domain/Range、风险级别、自动发布策略
+            </div>
+<div class="layer data">
+<b>④ Knowledge Lifecycle &amp; Storage</b>
+              Raw Document → Mention → Candidate → Validated → Production；Schema Candidate → Shadow → Published
+            </div>
+</div>
+</div>
+<h3>5.1 两个相互反馈的主循环</h3>
+<div class="grid">
+<div class="card">
+<h4>Knowledge Production Loop</h4>
+<p>文档解析 → 语义原子 → 实体解析 → Claim 规范化 → 证据校验 → 知识发布。</p>
+</div>
+<div class="card">
+<h4>Schema Evolution Loop</h4>
+<p>Schema Gap → 候选类型/关系 → 跨文档积累 → Shadow 评估 → Schema 版本发布。</p>
+</div>
+</div>
+<p>
+          两个循环共享候选与证据信号，但使用不同的发布策略。普通知识实例可以快速发布，
+          Schema 结构变更必须经过更严格的影子迁移和回归测试。
+        </p>
+</section><section id="governance">
+<h2>5. 本体与知识治理</h2>
+<h3>9.1 知识生命周期</h3>
+<pre><code>OBSERVED
+  → EXTRACTED
+  → NORMALIZED
+  → RESOLVED
+  → EVIDENCE_VERIFIED
+  → CRITIC_APPROVED
+  → CANDIDATE
+  → PUBLISHED
+
+异常路径：
+NEEDS_MORE_EVIDENCE / AMBIGUOUS / QUARANTINED / REJECTED</code></pre>
+<h3>9.2 Schema 生命周期</h3>
+<pre><code>OBSERVED
+  → CANDIDATE
+  → STABLE_CANDIDATE
+  → SHADOW
+  → CANARY
+  → PUBLISHED
+  → DEPRECATED</code></pre>
+<h3>9.3 风险分级</h3>
+<table>
+<thead><tr><th>等级</th><th>变更</th><th>策略</th></tr></thead>
+<tbody>
+<tr>
+<td class="risk-low">低风险</td>
+<td>新实例、新 Claim、新证据、别名补充</td>
+<td>门槛通过后自动发布</td>
+</tr>
+<tr>
+<td class="risk-mid">中风险</td>
+<td>新类型、新关系、新属性、Domain/Range 扩展</td>
+<td>稳定候选 + 独立 Critic + Shadow</td>
+</tr>
+<tr>
+<td class="risk-high">高风险</td>
+<td>正式类型合并/拆分、父类变化、删除、历史批量迁移</td>
+<td>影响分析 + Shadow Migration + Canary + 可回滚</td>
+</tr>
+</tbody>
+</table>
+<h3>9.4 自动晋升信号</h3>
+<ul>
+<li>独立支持文档数与来源多样性。</li>
+<li>术语语境稳定性、实例聚类一致性和关系模式一致性。</li>
+<li>与已有 Schema 的相似度及可分离性。</li>
+<li>证据覆盖率、冲突率、时间稳定性。</li>
+<li>Frozen Corpus 上的新旧版本质量差异。</li>
+</ul>
+</section><section id="harness">
+<h2>6. 可控 Harness 设计</h2>
+<h3>10.1 LangGraph 负责的控制能力</h3>
+<div class="grid three">
+<div class="card"><h4>状态</h4><p>共享 State、Checkpoints、线程历史、恢复与回放。</p></div>
+<div class="card"><h4>路由</h4><p>条件边、重试路径、隔离路径、Shadow 和发布路径。</p></div>
+<div class="card"><h4>预算</h4><p>模型调用、工具调用、Token、时间与最大循环次数。</p></div>
+<div class="card"><h4>权限</h4><p>节点级工具白名单、只读/候选写/生产写分离。</p></div>
+<div class="card"><h4>版本</h4><p>模型、Prompt、Schema、Policy、工具与图拓扑版本。</p></div>
+<div class="card"><h4>审计</h4><p>每个状态变化、工具调用、验证结论和发布原因可追踪。</p></div>
+</div>
+<h3>10.2 工具网关</h3>
+<p>Agent 不直接访问底层存储，仅可调用窄接口工具：</p>
+<pre><code>search_entity_candidates(...)
+search_schema_candidates(...)
+read_evidence(...)
+get_relation_patterns(...)
+normalize_measurement(...)
+submit_entity_candidate(...)
+submit_schema_proposal(...)
+mark_conflict(...)</code></pre>
+<h3>10.3 硬停止条件</h3>
+<ul>
+<li>每个节点最大重试次数。</li>
+<li>每次运行最大 LLM 和工具调用数。</li>
+<li>每个实体解析最大候选数和上下文扩展次数。</li>
+<li>达到预算仍不确定时，必须输出 <code>AMBIGUOUS</code> 或 <code>UNKNOWN</code>。</li>
+<li>单次运行最多提出有限数量 Schema 变更，防止本体爆炸。</li>
+</ul>
+<h3>10.4 持久化与中断</h3>
+<p>
+          编译图时使用数据库支持的 Checkpointer。LangGraph 会将状态按线程保存为检查点，
+          可支持故障恢复和 time-travel 调试。<sup><a href="#ref2">[2]</a></sup>
+          高风险节点可调用 <code>interrupt()</code> 暂停，之后用 <code>Command(resume=...)</code> 恢复。<sup><a href="#ref3">[3]</a></sup>
+</p>
+</section><section id="storage">
+<h2>7. 数据与存储设计</h2>
+<table>
+<thead><tr><th>组件</th><th>保存内容</th><th>初期建议</th></tr></thead>
+<tbody>
+<tr>
+<td>Object Store</td>
+<td>原始文档、解析结果、图片、表格、版本快照</td>
+<td>MinIO / S3</td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td>文档元数据、Mention、Candidate、Schema Registry、Run Record、审计</td>
+<td>主事务存储</td>
+</tr>
+<tr>
+<td>pgvector / Vector DB</td>
+<td>实体、术语、Schema 和证据向量</td>
+<td>优先 pgvector，规模扩大后再拆分</td>
+</tr>
+<tr>
+<td>Graph Store</td>
+<td>正式实体、关系、事件与 Claim 图</td>
+<td>早期可 PostgreSQL；复杂图分析后引入 Neo4j/RDF</td>
+</tr>
+<tr>
+<td>LangGraph Checkpointer</td>
+<td>线程级状态快照与待恢复运行</td>
+<td>数据库持久化 Checkpointer</td>
+</tr>
+</tbody>
+</table>
+<h3>11.1 Claim 中心模型</h3>
+<pre><code>{
+  "subject": "RF Bias Power",
+  "predicate": "positively_affects",
+  "object": "Etch Rate",
+  "conditions": {
+    "process": "ICP Etching",
+    "material": "SiC",
+    "gas": ["SF6", "O2"],
+    "pressure": {"value": 20, "unit": "mTorr"}
+  },
+  "evidence": {
+    "document_id": "DOC-0017",
+    "version": 2,
+    "span_id": "SPAN-239"
+  },
+  "provenance": {
+    "run_id": "RUN-01823",
+    "schema_version": "0.8.2",
+    "prompt_version": "extract-12"
+  }
+}</code></pre>
+</section><section id="deployment">
+<h2>8. 部署与运行模式</h2>
+<h3>14.1 最小部署</h3>
+<pre><code>FastAPI / LangGraph API
+        │
+        ├── LangGraph Worker
+        ├── LLM Gateway
+        ├── Tool Services
+        ├── PostgreSQL + pgvector
+        └── MinIO / S3</code></pre>
+<h3>14.2 扩展部署</h3>
+<pre><code>Document Connectors → Event Queue
+                         │
+                         ▼
+                 LangGraph Workers
+            ┌────────────┼────────────┐
+            ▼            ▼            ▼
+      Extraction      Resolution   Schema Audit
+          Workers       Workers       Workers
+            │            │            │
+            └────────────┴────────────┘
+                         ▼
+              Candidate / Registry DB
+                         ▼
+                 Publisher Service
+                         ▼
+                 Production KG / API</code></pre>
+<h3>14.3 并发与幂等</h3>
+<ul>
+<li>同一文档版本使用稳定 thread ID，防止重复创建独立运行。</li>
+<li>所有候选写入使用 <code>content_hash + schema_version + extractor_version</code> 作为幂等键。</li>
+<li>生产发布使用版本锁，确保同一 Schema 版本下原子写入。</li>
+<li>并行抽取的 State 字段必须定义 reducer，避免并发更新错误。</li>
+</ul>
+</section><section id="roadmap">
+<h2>9. 分阶段实施路线</h2>
+<div class="roadmap">
+<div class="phase">
+<div class="label">Phase 1<br/><span class="small">2–3 周</span></div>
+<div>
+<strong>最小 LangGraph Harness</strong>
+<p>文档接入、Profile、分段、语义原子抽取、Candidate Store、Checkpointer 和运行记录。</p>
+</div>
+</div>
+<div class="phase">
+<div class="label">Phase 2<br/><span class="small">3–5 周</span></div>
+<div>
+<strong>实体解析与 Claim 建模</strong>
+<p>实体候选检索、别名、单位标准化、条件化 Claim、Evidence 强绑定。</p>
+</div>
+</div>
+<div class="phase">
+<div class="label">Phase 3<br/><span class="small">4–6 周</span></div>
+<div>
+<strong>Schema 自动发现</strong>
+<p>术语聚类、类型与关系提案、Schema Candidate Registry、自动晋升信号。</p>
+</div>
+</div>
+<div class="phase">
+<div class="label">Phase 4<br/><span class="small">3–5 周</span></div>
+<div>
+<strong>质量治理与自修复</strong>
+<p>Semantic Critic、冲突检测、Policy Engine、隔离区和确定性修复。</p>
+</div>
+</div>
+<div class="phase">
+<div class="label">Phase 5<br/><span class="small">4–6 周</span></div>
+<div>
+<strong>Shadow Schema 与自动演化</strong>
+<p>Frozen Corpus、Shadow Migration、Canary、版本发布和历史知识迁移。</p>
+</div>
+</div>
+</div>
+<div class="callout green">
+<strong>MVP 建议：</strong>
+          第一版只选择一个相对集中的半导体子领域，例如刻蚀、先进封装或设备故障，
+          先证明“文档 → Claim/Evidence → 实体对齐 → Schema 候选”的闭环，再扩展全领域。
+        </div>
+</section><section id="metrics">
+<h2>10. 指标体系</h2>
+<table>
+<thead><tr><th>维度</th><th>核心指标</th><th>初始目标</th></tr></thead>
+<tbody>
+<tr><td>证据质量</td><td>Evidence coverage、Unsupported claim rate</td><td>正式 Claim 证据覆盖率 100%</td></tr>
+<tr><td>实体质量</td><td>重复率、歧义率、跨文档一致性</td><td>重复实体率 ≤ 2%</td></tr>
+<tr><td>Schema 质量</td><td>单实例类型率、覆盖率、重叠率、增长率</td><td>防止类型爆炸并保持高覆盖</td></tr>
+<tr><td>稳定性</td><td>重复运行一致性、格式扰动稳定性</td><td>核心知识变化率持续下降</td></tr>
+<tr><td>效率</td><td>P50/P95 更新延迟、重算率、Token 成本</td><td>增量处理比例 ≥ 80%</td></tr>
+<tr><td>治理</td><td>隔离率、自动修复准确率、回滚耗时</td><td>高风险变更 100% 可回滚</td></tr>
+<tr><td>可观测性</td><td>可追溯率、可重放率、版本完整率</td><td>生产知识全链路可追踪</td></tr>
+</tbody>
+</table>
+</section><section id="conclusion">
+<h2>11. 架构结论</h2>
+<p class="lead">
+          本项目最合适的形态不是“一个 Agent 自动生成知识图谱”，而是一个由 LangGraph 驱动的
+          <strong>受控自演化知识系统</strong>。
+        </p>
+<div class="callout">
+<strong>最终架构公式：</strong><br/>
+          文档事件 → LangGraph 状态机 → 受限语义 Agent → 白名单工具 →
+          确定性验证 → 独立语义复核 → Policy Engine → Candidate/Shadow →
+          非 LLM Publisher → Production Knowledge Graph。
+        </div>
+<ol>
+<li>以 LangGraph Graph API 作为唯一编排和状态真源。</li>
+<li>Agent 只做语义判断，不获得生产写权限。</li>
+<li>知识生产与 Schema 演化拆成两个子图和不同风险路径。</li>
+<li>所有事实与本体变更都必须有文档证据、版本和运行记录。</li>
+<li>用 Candidate/Production 隔离、Shadow Migration 和回归测试控制自动演化风险。</li>
+<li>先实现单一子领域 MVP，再逐步扩大语料和本体覆盖范围。</li>
+</ol>
+</section><div class="part-banner"><div class="num">PART II</div><h2>代码与工程设计</h2><p>聚焦 LangGraph 的工程落地，包括技术选型、State、主图、子图、节点、目录结构、测试和运行追踪。</p></div><section id="why-langgraph">
+<h2>12. 技术选型：为什么使用 LangGraph</h2>
+<p>
+          LangGraph 的定位是面向长期、带状态 Agent 的低层编排运行时。其 Graph API 将系统拆成具名节点、边和共享状态，
+          适合把不确定的 LLM 语义节点嵌入确定性的治理流程。官方文档强调其持久化、durable execution、
+          human-in-the-loop 和流式执行能力。<sup><a href="#ref1">[1]</a></sup>
+</p>
+<table>
+<thead><tr><th>LangGraph 能力</th><th>在本系统中的用途</th></tr></thead>
+<tbody>
+<tr>
+<td>StateGraph</td>
+<td>显式定义文档处理、实体解析、Schema 演化和发布状态机。</td>
+</tr>
+<tr>
+<td>Checkpointer</td>
+<td>每一步保存快照，支持失败恢复、审批暂停、历史回放和 time travel。<sup><a href="#ref2">[2]</a></sup></td>
+</tr>
+<tr>
+<td>Conditional Edges</td>
+<td>依据风险、证据质量和验证结果路由到发布、隔离、重试或候选积累。</td>
+</tr>
+<tr>
+<td>Interrupt</td>
+<td>高风险变更可暂停等待外部审批；即使日常不依赖人工，也保留治理断点。<sup><a href="#ref3">[3]</a></sup></td>
+</tr>
+<tr>
+<td>Subgraphs</td>
+<td>将实体解析、本体演化、质量审计拆成可测试的独立子图。<sup><a href="#ref4">[4]</a></sup></td>
+</tr>
+<tr>
+<td>Streaming</td>
+<td>实时输出节点更新、任务状态和调试事件，用于管理后台和观测。<sup><a href="#ref5">[5]</a></sup></td>
+</tr>
+</tbody>
+</table>
+<div class="callout green">
+<strong>选择建议：</strong>
+          使用 LangGraph <strong>Graph API</strong> 作为主架构，因为本项目需要可视化拓扑、显式状态转换、
+          条件路由与子图组合。Functional API 可用于局部工具流程，但不应成为主控制面。
+        </div>
+</section><section id="graph-design">
+<h2>13. LangGraph 主图与子图设计</h2>
+<h3>6.1 主图拓扑</h3>
+<div class="diagram">
+<div class="flow">
+<div class="box">ingest</div><div class="arrow">→</div>
+<div class="box">profile</div><div class="arrow">→</div>
+<div class="box">segment</div><div class="arrow">→</div>
+<div class="box">extract</div><div class="arrow">→</div>
+<div class="box">resolve</div><div class="arrow">→</div>
+<div class="box">validate</div><div class="arrow">→</div>
+<div class="box">policy</div><div class="arrow">→</div>
+<div class="box">publish / quarantine</div>
+</div>
+</div>
+<h3>6.2 条件路由</h3>
+<table>
+<thead><tr><th>节点</th><th>条件</th><th>下一步</th></tr></thead>
+<tbody>
+<tr><td>profile</td><td>文档质量过低或解析失败</td><td>quarantine_document</td></tr>
+<tr><td>extract</td><td>现有 Schema 覆盖充分</td><td>entity_resolution</td></tr>
+<tr><td>extract</td><td>存在高频无法归类概念</td><td>schema_gap_subgraph</td></tr>
+<tr><td>validate</td><td>确定性错误</td><td>repair_or_reject</td></tr>
+<tr><td>critic</td><td>证据不足或语义歧义</td><td>needs_more_evidence</td></tr>
+<tr><td>policy</td><td>低风险且全部门槛通过</td><td>publish_knowledge</td></tr>
+<tr><td>policy</td><td>中高风险 Schema 变更</td><td>shadow_schema_subgraph</td></tr>
+</tbody>
+</table>
+<h3>6.3 推荐子图</h3>
+<ul>
+<li><strong>Entity Resolution Subgraph：</strong>候选检索、规则匹配、LLM 消歧、冲突处理。</li>
+<li><strong>Schema Gap Subgraph：</strong>术语聚类、已有类型匹配、类型/关系提案、稳定性评分。</li>
+<li><strong>Quality Audit Subgraph：</strong>证据、单位、重复、逻辑与语义复核。</li>
+<li><strong>Shadow Migration Subgraph：</strong>在影子 Schema 上重映射固定语料并比较新旧结果。</li>
+</ul>
+</section><section id="state">
+<h2>14. State 与数据契约</h2>
+<p>
+          LangGraph 的共享 State 应存储可序列化的任务事实，不保存数据库连接、模型对象或不可重放的运行时资源。
+          节点只返回状态增量，外部副作用通过工具服务执行。
+        </p>
+<h3>7.1 主状态模型</h3>
+<pre><code>from typing import Annotated, Literal, TypedDict
+from operator import add
+
+class GraphState(TypedDict, total=False):
+    run_id: str
+    thread_id: str
+
+    document_id: str
+    document_version: int
+    document_type: str
+    domains: list[str]
+
+    schema_version: str
+    policy_version: str
+    prompt_versions: dict[str, str]
+    model_routes: dict[str, str]
+
+    segments: list[dict]
+    semantic_atoms: Annotated[list[dict], add]
+    entity_decisions: Annotated[list[dict], add]
+    claim_candidates: Annotated[list[dict], add]
+    schema_proposals: Annotated[list[dict], add]
+
+    validation_results: Annotated[list[dict], add]
+    policy_decisions: Annotated[list[dict], add]
+    warnings: Annotated[list[str], add]
+
+    retry_count: int
+    llm_call_count: int
+    tool_call_count: int
+    status: Literal[
+        "running", "candidate", "published",
+        "quarantined", "rejected", "failed"
+    ]</code></pre>
+<h3>7.2 关键设计原则</h3>
+<ul>
+<li>输入中固定 <code>schema_version</code>、<code>policy_version</code>、Prompt 和模型路由，保证可重放。</li>
+<li>并行节点写同一字段时使用 reducer，避免并发状态覆盖。</li>
+<li>大文本、图片和向量不直接进入 State，仅保存对象存储 URI 和内容哈希。</li>
+<li>每个候选对象都带 <code>document_id</code>、版本、证据跨度和生成运行 ID。</li>
+</ul>
+</section><section id="nodes">
+<h2>15. 节点与 Agent 模块设计</h2>
+<table>
+<thead><tr><th>节点 / Agent</th><th>输入</th><th>输出</th><th>权限</th></tr></thead>
+<tbody>
+<tr>
+<td>Corpus Analyst</td>
+<td>文档元信息、摘要、来源</td>
+<td>文档类型、子领域、抽取配置、质量分数</td>
+<td>只读</td>
+</tr>
+<tr>
+<td>Semantic Extractor</td>
+<td>片段、相关 Schema 子集、单位词典</td>
+<td>Mention、Event、Measurement、Condition、Claim、Evidence</td>
+<td>候选写</td>
+</tr>
+<tr>
+<td>Entity Resolver</td>
+<td>Mention、Top-K 候选、别名、邻居</td>
+<td>LINK / CREATE_CANDIDATE / AMBIGUOUS / REJECT</td>
+<td>候选写</td>
+</tr>
+<tr>
+<td>Schema Proposer</td>
+<td>无法映射实例、聚类、关系模式</td>
+<td>类型、关系、属性、合并或拆分提案</td>
+<td>Schema 候选写</td>
+</tr>
+<tr>
+<td>Semantic Critic</td>
+<td>候选、原文证据、相关 Schema</td>
+<td>支持、矛盾、过度推断、缺失条件</td>
+<td>只读</td>
+</tr>
+<tr>
+<td>Policy Node</td>
+<td>全部验证信号</td>
+<td>发布、保留、隔离、Shadow、拒绝</td>
+<td>状态决策</td>
+</tr>
+<tr>
+<td>Publisher</td>
+<td>已批准对象与版本</td>
+<td>生产写入回执</td>
+<td>生产写；无 LLM</td>
+</tr>
+</tbody>
+</table>
+<div class="callout amber">
+<strong>避免把所有节点都做成 Agent：</strong>
+          文档哈希、格式解析、单位换算、证据 offset 检查、循环检测、版本写入等必须使用确定性代码。
+          只有同义判断、概念归纳、实体消歧和 Claim 支持判断交给 LLM。
+        </div>
+</section><section id="code">
+<h2>16. 项目目录与代码骨架</h2>
+<h3>12.1 推荐项目目录</h3>
+<pre><code>semiconductor_knowledge_system/
+├── pyproject.toml
+├── langgraph.json
+├── configs/
+│   ├── models.yaml
+│   ├── policies.yaml
+│   └── workflows.yaml
+├── src/
+│   ├── graph/
+│   │   ├── state.py
+│   │   ├── builder.py
+│   │   ├── routing.py
+│   │   └── subgraphs/
+│   │       ├── entity_resolution.py
+│   │       ├── schema_evolution.py
+│   │       ├── quality_audit.py
+│   │       └── shadow_migration.py
+│   ├── nodes/
+│   │   ├── ingest.py
+│   │   ├── profile.py
+│   │   ├── segment.py
+│   │   ├── extract.py
+│   │   ├── resolve.py
+│   │   ├── propose_schema.py
+│   │   ├── validate.py
+│   │   ├── critic.py
+│   │   ├── policy.py
+│   │   └── publish.py
+│   ├── agents/
+│   │   ├── corpus_analyst.py
+│   │   ├── extractor.py
+│   │   ├── resolver.py
+│   │   ├── schema_proposer.py
+│   │   └── semantic_critic.py
+│   ├── contracts/
+│   │   ├── documents.py
+│   │   ├── atoms.py
+│   │   ├── claims.py
+│   │   ├── schema.py
+│   │   └── decisions.py
+│   ├── tools/
+│   │   ├── entity_search.py
+│   │   ├── schema_search.py
+│   │   ├── evidence_reader.py
+│   │   ├── measurement.py
+│   │   └── candidate_submit.py
+│   ├── validators/
+│   │   ├── structural.py
+│   │   ├── evidence.py
+│   │   ├── units.py
+│   │   ├── ontology.py
+│   │   └── duplication.py
+│   ├── policy/
+│   │   ├── engine.py
+│   │   ├── risk.py
+│   │   └── transitions.py
+│   ├── repositories/
+│   │   ├── documents.py
+│   │   ├── candidates.py
+│   │   ├── schema.py
+│   │   └── production_graph.py
+│   └── observability/
+│       ├── tracing.py
+│       ├── metrics.py
+│       └── audit.py
+└── tests/
+    ├── unit/
+    ├── graph/
+    ├── contracts/
+    ├── regression/
+    ├── metamorphic/
+    └── frozen_corpus/</code></pre>
+<h3>12.2 主图骨架</h3>
+<pre><code>from langgraph.graph import StateGraph, START, END
+from .state import GraphState
+from .routing import route_after_validation, route_after_policy
+
+def build_graph(checkpointer):
+    g = StateGraph(GraphState)
+
+    g.add_node("ingest", ingest_node)
+    g.add_node("profile", profile_node)
+    g.add_node("segment", segment_node)
+    g.add_node("extract", extract_node)
+    g.add_node("resolve", entity_resolution_subgraph)
+    g.add_node("schema_gap", schema_evolution_subgraph)
+    g.add_node("validate", validation_node)
+    g.add_node("critic", semantic_critic_node)
+    g.add_node("policy", policy_node)
+    g.add_node("publish", publish_node)
+    g.add_node("quarantine", quarantine_node)
+
+    g.add_edge(START, "ingest")
+    g.add_edge("ingest", "profile")
+    g.add_edge("profile", "segment")
+    g.add_edge("segment", "extract")
+    g.add_edge("extract", "resolve")
+    g.add_edge("resolve", "schema_gap")
+    g.add_edge("schema_gap", "validate")
+
+    g.add_conditional_edges(
+        "validate",
+        route_after_validation,
+        {
+            "critic": "critic",
+            "quarantine": "quarantine",
+            "reject": END,
+        },
+    )
+
+    g.add_edge("critic", "policy")
+
+    g.add_conditional_edges(
+        "policy",
+        route_after_policy,
+        {
+            "publish": "publish",
+            "candidate": END,
+            "shadow": "schema_gap",
+            "quarantine": "quarantine",
+            "reject": END,
+        },
+    )
+
+    g.add_edge("publish", END)
+    g.add_edge("quarantine", END)
+
+    return g.compile(checkpointer=checkpointer)</code></pre>
+<h3>12.3 结构化 Agent 节点</h3>
+<pre><code>async def schema_proposer_node(state: GraphState) -&gt; dict:
+    context = await build_schema_context(
+        unresolved_mentions=state["entity_decisions"],
+        schema_version=state["schema_version"],
+        max_candidates=10,
+    )
+
+    proposal = await schema_proposer_model.with_structured_output(
+        SchemaProposalBatch
+    ).ainvoke(context)
+
+    return {
+        "schema_proposals": proposal.items,
+        "llm_call_count": state.get("llm_call_count", 0) + 1,
+    }</code></pre>
+<h3>12.4 Policy Engine</h3>
+<pre><code>def decide_schema_action(signals: GovernanceSignals) -&gt; PolicyDecision:
+    if signals.deterministic_violations:
+        return PolicyDecision(action="reject")
+
+    if signals.evidence_coverage &lt; 1.0:
+        return PolicyDecision(action="retain_candidate")
+
+    if signals.independent_document_count &lt; 3:
+        return PolicyDecision(action="retain_candidate")
+
+    if not signals.critic_approved:
+        return PolicyDecision(action="quarantine")
+
+    if signals.risk_level == "high":
+        return PolicyDecision(action="start_shadow_migration")
+
+    if (
+        signals.instance_coherence &gt;= 0.85
+        and signals.semantic_stability &gt;= 0.85
+        and signals.conflict_rate &lt;= 0.05
+    ):
+        return PolicyDecision(action="promote_stable")
+
+    return PolicyDecision(action="retain_candidate")</code></pre>
+<h3>12.5 持久化运行</h3>
+<pre><code>graph = build_graph(checkpointer=postgres_checkpointer)
+
+config = {
+    "configurable": {
+        "thread_id": f"document:{document_id}:v{version}"
+    }
+}
+
+result = await graph.ainvoke(
+    {
+        "run_id": run_id,
+        "document_id": document_id,
+        "document_version": version,
+        "schema_version": "semiconductor-0.1.0",
+        "policy_version": "policy-0.1.0",
+        "status": "running",
+    },
+    config=config,
+)</code></pre>
+</section><section id="testing">
+<h2>17. 测试、评估与可观测性</h2>
+<p>
+          LangGraph 官方提供针对自定义图的测试模式；节点、路由和图状态应分别测试，而不是只测试最终答案。<sup><a href="#ref6">[6]</a></sup>
+</p>
+<h3>13.1 五类测试</h3>
+<div class="grid">
+<div class="card"><h4>Unit Tests</h4><p>状态转换、规则、单位、证据 offset、循环检测。</p></div>
+<div class="card"><h4>Contract Tests</h4><p>所有 Agent、工具和节点输出符合 Pydantic/JSON Schema。</p></div>
+<div class="card"><h4>Frozen Corpus</h4><p>固定半导体文档，模型、Prompt 或 Schema 变化后重跑对比。</p></div>
+<div class="card"><h4>Metamorphic Tests</h4><p>段落重排、格式转换、同义改写后，核心知识应保持稳定。</p></div>
+<div class="card"><h4>Failure Tests</h4><p>模型超时、节点异常、重复执行和发布中断后的恢复能力。</p></div>
+<div class="card"><h4>Shadow Evaluation</h4><p>新 Schema 在影子图上运行，不直接影响生产结果。</p></div>
+</div>
+<h3>13.2 运行记录</h3>
+<pre><code>{
+  "run_id": "RUN-01823",
+  "thread_id": "document:DOC-0017:v2",
+  "graph_version": "graph-0.4.0",
+  "schema_version": "semiconductor-0.8.2",
+  "policy_version": "policy-0.3.0",
+  "model_routes": {...},
+  "prompt_versions": {...},
+  "allowed_tools": [...],
+  "budgets": {
+    "max_llm_calls": 20,
+    "max_tool_calls": 50,
+    "timeout_seconds": 600
+  },
+  "validator_results": [...],
+  "policy_decisions": [...],
+  "final_state": "candidate"
+}</code></pre>
+<h3>13.3 观测方式</h3>
+<ul>
+<li>节点级延迟、失败率、Token 与成本。</li>
+<li>每条知识从文档到发布的完整 trace。</li>
+<li>Schema 版本变化导致的实体重映射数量。</li>
+<li>通过 LangGraph streaming 输出节点 updates、checkpoints 和 debug 事件。<sup><a href="#ref5">[5]</a></sup></li>
+<li>开发期可使用 LangSmith Studio 查看 Prompt、工具调用与每一步执行。<sup><a href="#ref7">[7]</a></sup></li>
+</ul>
+</section><section id="references">
+<h2>参考资料</h2>
+<ol>
+<li id="ref1">
+            LangChain Docs, <em>LangGraph overview</em>：
+            <a href="https://docs.langchain.com/oss/python/langgraph/overview">官方文档</a>。
+          </li>
+<li id="ref2">
+            LangChain Docs, <em>Persistence</em> 与 <em>Durable execution</em>：
+            <a href="https://docs.langchain.com/oss/python/langgraph/persistence">Persistence</a>；
+            <a href="https://docs.langchain.com/oss/python/langgraph/durable-execution">Durable execution</a>。
+          </li>
+<li id="ref3">
+            LangChain Docs, <em>Interrupts</em>：
+            <a href="https://docs.langchain.com/oss/python/langgraph/interrupts">官方文档</a>。
+          </li>
+<li id="ref4">
+            LangChain Docs, <em>Subgraphs</em>：
+            <a href="https://docs.langchain.com/oss/python/langgraph/use-subgraphs">官方文档</a>。
+          </li>
+<li id="ref5">
+            LangChain Docs, <em>Streaming</em>：
+            <a href="https://docs.langchain.com/oss/python/langgraph/streaming">官方文档</a>。
+          </li>
+<li id="ref6">
+            LangChain Docs, <em>Test</em>：
+            <a href="https://docs.langchain.com/oss/python/langgraph/test">官方文档</a>。
+          </li>
+<li id="ref7">
+            LangChain Docs, <em>LangSmith Studio</em>：
+            <a href="https://docs.langchain.com/oss/python/langgraph/studio">官方文档</a>。
+          </li>
+</ol>
+</section></main>
+</div>
+<div class="footer">基于 LangGraph 的半导体文档自演化知识系统设计报告 · 架构与代码分离版</div>
+</div>
+</body>
+</html>

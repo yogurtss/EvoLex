@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evolex"
+version = "0.2.0"
+description = "Conversational CLI and controlled harness for technical document knowledge extraction."
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.12",
+  "langgraph>=0.2",
+  "openai>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+rich = [
+  "rich>=13",
+]
+
+[project.scripts]
+evolex = "evolex.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
