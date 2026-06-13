@@ -60,11 +60,12 @@ def _heuristic_extract(atoms: list[dict], entities: list[dict]) -> list[dict]:
 
     Atoms co-occurring in the same segment with measurement/property types
     get related via has_measurement / has_property predicates.
+    Only consumes entities that have been LINKed or CREATE_CANDIDATE.
     """
     # Build lookup: segment_id -> list of atom indices with their entity ids
     entity_by_atom_idx: dict[int, str] = {}
     for ent in entities:
-        for idx in ent["source_atom_indices"]:
+        for idx in ent.get("source_atom_indices", []):
             entity_by_atom_idx[idx] = ent["entity_id"]
 
     # Group atoms by segment
@@ -124,3 +125,21 @@ def _heuristic_extract(atoms: list[dict], entities: list[dict]) -> list[dict]:
                 })
 
     return relations
+
+
+def _resolve_entity_decisions(
+    entities: list[dict],
+    entity_decisions: list[dict],
+) -> list[dict]:
+    """Filter entities, keeping only those with LINK or CREATE_CANDIDATE decisions.
+
+    Returns a new entity list with AMBIGUOUS/REJECT entries excluded.
+    """
+    valid_entity_ids: set[str] = set()
+    for d in entity_decisions:
+        if d.get("decision") in ("LINK", "CREATE_CANDIDATE"):
+            eid = d.get("target_entity_id")
+            if eid:
+                valid_entity_ids.add(eid)
+
+    return [e for e in entities if e.get("entity_id") in valid_entity_ids]

@@ -5,6 +5,7 @@ from evolex.agents.deepseek_client import HeuristicExtractor
 from evolex.graph.runner import (
     Phase1RunResult,
     Phase2RunResult,
+    Phase3RunResult,
     run_phase1_text,
     run_phase2_text,
     run_pipeline_text,
@@ -128,17 +129,18 @@ def test_backward_compat_phase1_unchanged(tmp_path: Path) -> None:
     assert Path(result.candidate_output_path).exists()
 
 
-def test_unified_pipeline_alias_runs_phase2(tmp_path: Path) -> None:
+def test_system_pipeline_alias_runs_phase3(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("EVOLEX_OFFLINE", "1")
     result = run_pipeline_text(
         "API Gateway retries HTTP 503 responses for 2 seconds before failing over.",
-        pipeline="phase2",
+        pipeline="system",
         output_dir=tmp_path,
-        extractor=HeuristicExtractor(),
     )
 
-    assert isinstance(result, Phase2RunResult)
+    assert isinstance(result, Phase3RunResult)
     assert result.status == "published"
     assert result.entity_count >= 1
+    assert result.claim_count >= 1
 
 
 def test_phase2_uses_relation_specific_extractor(tmp_path: Path) -> None:

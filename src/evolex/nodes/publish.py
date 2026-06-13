@@ -11,6 +11,7 @@ DEFAULT_KG_DIR = Path("data/kg")
 
 def make_publish_node(output_dir: Path | None = None):
     """Create a publish node that writes structured output to a SQLite KG store."""
+
     kg_dir = output_dir or DEFAULT_KG_DIR
 
     def publish_node(state: GraphState) -> dict:
@@ -37,6 +38,10 @@ def make_publish_node(output_dir: Path | None = None):
                 entity_count=len(entities),
                 relation_count=len(relations),
                 started_at=created_at,
+                document_version=state.get("document_version", 0),
+                schema_version=state.get("schema_version", ""),
+                policy_version=state.get("policy_version", ""),
+                graph_version=state.get("graph_version", ""),
             )
 
             if entities:
@@ -47,6 +52,23 @@ def make_publish_node(output_dir: Path | None = None):
 
             if quality_scores:
                 store.insert_quality_scores(quality_scores, state["run_id"], created_at)
+
+            entity_decisions = state.get("entity_decisions", [])
+            if entity_decisions:
+                store.insert_entity_decisions(entity_decisions, state["run_id"], created_at)
+
+            # Write audit trail
+            policy_decisions = state.get("policy_decisions", [])
+            if policy_decisions:
+                store.insert_audit_entry(
+                    run_id=state["run_id"],
+                    node_name="policy",
+                    status_before=state.get("status", "running"),
+                    status_after=final_status,
+                    decision=policy_decisions[0].get("action", ""),
+                    warnings=", ".join(policy_decisions[0].get("reasons", [])),
+                    created_at=created_at,
+                )
 
             store.commit()
         finally:

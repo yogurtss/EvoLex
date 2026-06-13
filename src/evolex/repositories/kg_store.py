@@ -34,6 +34,19 @@ class KGStore:
                 FOREIGN KEY (entity_id) REFERENCES entities(entity_id)
             );
 
+            CREATE TABLE IF NOT EXISTS entity_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                mention_text TEXT NOT NULL,
+                normalized_text TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                target_entity_id TEXT,
+                confidence REAL NOT NULL DEFAULT 0.0,
+                reason TEXT,
+                segment_id TEXT,
+                created_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS relations (
                 relation_id TEXT PRIMARY KEY,
                 subject_entity_id TEXT NOT NULL,
@@ -60,11 +73,26 @@ class KGStore:
             CREATE TABLE IF NOT EXISTS runs (
                 run_id TEXT PRIMARY KEY,
                 document_id TEXT NOT NULL,
+                document_version INTEGER NOT NULL DEFAULT 0,
+                schema_version TEXT NOT NULL DEFAULT '',
+                policy_version TEXT NOT NULL DEFAULT '',
+                graph_version TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL,
                 segment_count INTEGER NOT NULL DEFAULT 0,
                 entity_count INTEGER NOT NULL DEFAULT 0,
                 relation_count INTEGER NOT NULL DEFAULT 0,
                 started_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS run_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                node_name TEXT NOT NULL,
+                status_before TEXT,
+                status_after TEXT,
+                decision TEXT,
+                warnings TEXT,
+                created_at TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_relations_subject
@@ -73,6 +101,10 @@ class KGStore:
                 ON relations(object_entity_id);
             CREATE INDEX IF NOT EXISTS idx_quality_run
                 ON quality_scores(run_id);
+            CREATE INDEX IF NOT EXISTS idx_entity_decisions_run
+                ON entity_decisions(run_id);
+            CREATE INDEX IF NOT EXISTS idx_run_audit_run
+                ON run_audit(run_id);
             """
         )
 
@@ -85,11 +117,54 @@ class KGStore:
         entity_count: int,
         relation_count: int,
         started_at: str,
+        document_version: int = 0,
+        schema_version: str = "",
+        policy_version: str = "",
+        graph_version: str = "",
     ) -> None:
         self.conn.execute(
-            "INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (run_id, document_id, status, segment_count, entity_count, relation_count, started_at),
+            "INSERT OR REPLACE INTO runs (run_id, document_id, document_version, schema_version, policy_version, graph_version, status, segment_count, entity_count, relation_count, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id, document_id, document_version,
+                schema_version, policy_version, graph_version,
+                status, segment_count, entity_count, relation_count,
+                started_at,
+            ),
         )
+
+    def insert_audit_entry(
+        self,
+        run_id: str,
+        node_name: str,
+        status_before: str | None,
+        status_after: str | None,
+        decision: str | None = None,
+        warnings: str | None = None,
+        created_at: str | None = None,
+    ) -> None:
+        from datetime import UTC, datetime
+        now = created_at or datetime.now(UTC).isoformat()
+        self.conn.execute(
+            "INSERT INTO run_audit (run_id, node_name, status_before, status_after, decision, warnings, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run_id, node_name, status_before, status_after, decision, warnings, now),
+        )
+
+    def fetch_audit(self, run_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT node_name, status_before, status_after, decision, warnings, created_at FROM run_audit WHERE run_id = ? ORDER BY id",
+            (run_id,),
+        ).fetchall()
+        return [
+            {
+                "node_name": r[0],
+                "status_before": r[1],
+                "status_after": r[2],
+                "decision": r[3],
+                "warnings": r[4],
+                "created_at": r[5],
+            }
+            for r in rows
+        ]
 
     def insert_entities(self, entities: list[dict], created_at: str) -> None:
         for ent in entities:
@@ -138,6 +213,41 @@ class KGStore:
                     created_at,
                 ),
             )
+
+    def insert_entity_decisions(self, decisions: list[dict], run_id: str, created_at: str) -> None:
+        for d in decisions:
+            self.conn.execute(
+                "INSERT INTO entity_decisions (run_id, mention_text, normalized_text, decision, target_entity_id, confidence, reason, segment_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    d.get("mention_text", ""),
+                    d.get("normalized_text", ""),
+                    d.get("decision", "CREATE_CANDIDATE"),
+                    d.get("target_entity_id"),
+                    float(d.get("confidence", 0.0)),
+                    d.get("reason", ""),
+                    d.get("segment_id", ""),
+                    created_at,
+                ),
+            )
+
+    def fetch_entity_decisions(self, run_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT mention_text, normalized_text, decision, target_entity_id, confidence, reason, segment_id FROM entity_decisions WHERE run_id = ? ORDER BY id",
+            (run_id,),
+        ).fetchall()
+        return [
+            {
+                "mention_text": r[0],
+                "normalized_text": r[1],
+                "decision": r[2],
+                "target_entity_id": r[3],
+                "confidence": r[4],
+                "reason": r[5],
+                "segment_id": r[6],
+            }
+            for r in rows
+        ]
 
     def fetch_entities(self) -> list[dict]:
         rows = self.conn.execute(

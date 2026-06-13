@@ -3,13 +3,15 @@
 EvoLex is a conversational CLI and controlled document-processing harness for
 technical document knowledge extraction.
 
-Phase 1 runs a minimal extract-validate-store pipeline. Phase 2 extends it with
-entity resolution, relation extraction, quality review, and structured
-publishing to a SQLite knowledge graph.
+By default EvoLex runs as one complete system: extract, validate, resolve
+entities, review quality, apply policy, and publish structured knowledge.
+The historical `phase1` / `phase2` / `phase3` names are still kept internally
+for testing and debug compatibility, but the public CLI now treats the full
+typed pipeline as the default runtime.
 
-## Pipeline
+## System Pipeline
 
-Phase 1 topology:
+Internally the system still has stage boundaries. The old Phase 1 topology was:
 
 ```text
 START
@@ -22,7 +24,7 @@ START
   -> END
 ```
 
-Phase 2 appends four additional nodes:
+The old Phase 2 topology appended publish to that chain:
 
 ```text
   ... -> candidate_store
@@ -33,14 +35,39 @@ Phase 2 appends four additional nodes:
   -> END
 ```
 
-- **entity_resolve** — deduplicates entities across segments and assigns
-  canonical names (heuristic, no LLM).
-- **relation_extract** — extracts relationships between atoms using the LLM
-  when available, falling back to proximity-based heuristics.
-- **quality_review** — scores and filters atoms and relations; flags
-  low-confidence, trivial, duplicate, and dangling-reference items.
-- **publish** — writes structured output to a SQLite knowledge graph under
-  `data/kg/`.
+The current unified system uses the Phase 3 topology with conditional routing:
+
+```text
+  ... -> extract
+  -> validate
+  -> entity_resolve
+  -> relation_extract
+  -> schema_gap           ← detects unmappable concepts
+  -> schema_proposer      ← generates schema proposals
+  -> quality_review
+       │
+       ▼  (conditional)
+  ┌── critic  ── policy ──┐
+  │                       │
+  ▼                       ▼
+quarantine            publish / candidate
+```
+
+| Node | What it does |
+|------|-------------|
+| `ingest` | Trims and validates raw document text |
+| `profile` | Detects domain keywords, sets document type |
+| `segment` | Splits text into sentence-boundary segments |
+| `extract` | Produces typed objects (Claim, Evidence, Mention, Measurement, Condition) or legacy semantic atoms |
+| `validate` | Validates object-level required fields; rejects Claims without Evidence |
+| `entity_resolve` | Resolves mentions to entities with decision records (LINK / CREATE_CANDIDATE / AMBIGUOUS / REJECT) |
+| `relation_extract` | Extracts relations between entities using LLM or heuristics |
+| `schema_gap` | Identifies concepts that cannot be mapped to known schema types/predicates |
+| `schema_proposer` | Generates new_type / new_relation / new_attribute proposals with supporting evidence |
+| `quality_review` | Scores and filters atoms and relations |
+| `critic` | Semantic review: verifies evidence sufficiency, flags inconsistencies |
+| `policy` | Risk-based routing decision (publish / candidate / quarantine / reject) |
+| `publish` | Writes approved objects to SQLite knowledge graph with audit trail |
 
 ## Environment
 
@@ -73,8 +100,9 @@ Without `rich`, the CLI falls back to plain-text output and no animations.
 
 ## DeepSeek API
 
-The extractor uses the DeepSeek OpenAI-compatible chat API when
-`DEEPSEEK_API_KEY` is available:
+The extractor is LLM-first. By default it uses the DeepSeek OpenAI-compatible
+chat API, and runs require an API key unless explicit offline debug mode is
+enabled:
 
 ```bash
 export DEEPSEEK_API_KEY="your-api-key"
@@ -84,6 +112,25 @@ Runtime settings:
 
 - `base_url`: `https://api.deepseek.com`
 - `model`: `deepseek-v4-flash`
+
+You can override these settings when starting the CLI:
+
+```bash
+evolex chat \
+  --llm-base-url https://api.deepseek.com \
+  --llm-model deepseek-v4-flash \
+  --llm-api-key "$DEEPSEEK_API_KEY"
+```
+
+You can also inspect and change them inside the interactive CLI:
+
+```text
+EvoLex> llm settings
+EvoLex> set llm url https://api.deepseek.com
+EvoLex> set llm model deepseek-v4-flash
+EvoLex> set llm api-key sk-...
+EvoLex> set llm timeout 45
+```
 
 The API path uses the official OpenAI SDK style:
 
@@ -102,14 +149,14 @@ EvoLex passes `reasoning_effort="high"` and
 Do not commit API keys. The repository intentionally reads the key only from the
 environment.
 
-If `DEEPSEEK_API_KEY` is not set, the harness uses a deterministic local
-heuristic extractor so tests and demos can run without network access.
-
-For a forced no-network local run, set:
+If you need a forced no-network local debug run, set:
 
 ```bash
 export EVOLEX_OFFLINE=1
 ```
+
+Offline mode uses deterministic heuristic extractors. That path exists for
+tests and local debugging; the main agent path is expected to use an LLM.
 
 `api_key.txt` is intentionally ignored by git and is not loaded automatically.
 Use the `DEEPSEEK_API_KEY` environment variable when you want real API calls.
@@ -119,21 +166,23 @@ Use the `DEEPSEEK_API_KEY` environment variable when you want real API calls.
 Start the CLI:
 
 ```bash
-# Phase 1 only (default)
+# Complete system (default)
 evolex chat
 
-# Phase 1 + 2 full pipeline
-evolex chat --pipeline phase1+2
-
-# Equivalent full-pipeline aliases
-evolex chat --pipeline phase2
+# Explicit aliases for the complete system
+evolex chat --pipeline system
 evolex chat --pipeline full
+evolex chat --pipeline phase3
+
+# Internal debug compatibility only
+evolex chat --pipeline phase2
+evolex chat --pipeline phase1
 ```
 
-### Example — Phase 1
+### Example — Unified System
 
 ```text
-Agent> EvoLex conversational CLI is ready. Pipeline: phase1.
+Agent> EvoLex conversational CLI is ready. System pipeline: phase3.
 Agent> Paste technical document text, or enter a local file path. Type help for commands.
 EvoLex> API Gateway retries HTTP 503 responses for 2 seconds before failing over.
 Agent> I will process this as a short document and run the harness.
@@ -143,34 +192,25 @@ Agent> Node completed: segment
 Agent> Node completed: extract
 Agent> Node completed: validate
 Agent> Node completed: candidate_store
+Agent> Node completed: entity_resolve
+Agent> Node completed: relation_extract
+Agent> Node completed: schema_gap
+Agent> Node completed: schema_proposer
+Agent> Node completed: quality_review
+Agent> Node completed: critic
+Agent> Node completed: policy
+Agent> Node completed: publish
 Agent> Completed:
-       status: candidate
+       status: published
        segments: 1
-       semantic_atoms: 4
+       semantic_atoms: 6
+       entities: 3
+       relations: 2
+       claims: 2
+       evidence: 2
+       policy: publish
+       publish: data/kg/RUN-xxxxxxxxxxxx.sqlite
        output: data/candidates/RUN-xxxxxxxxxxxx.jsonl
-```
-
-### Example — Phase 2
-
-```text
-EvoLex> API Gateway retries HTTP 503 responses for 2 seconds before failing over.
-
-  ✓ ingest       ✓ profile      ✓ segment      ✓ extract      ✓ validate
-  ✓ candidate_store  ✓ entity_resolve  ✓ relation_extract
-  ✓ quality_review   ✓ publish
-
-                    Run Result: RUN-xxxxxxxxxxxx
-┏━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ Field             ┃ Value                                   ┃
-┡━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ Status            │ published                               │
-│ Segments          │ 1                                       │
-│ Semantic Atoms    │ 4                                       │
-│ Entities          │ 4                                       │
-│ Relations         │ 3                                       │
-│ Publish Output    │ data/kg/RUN-xxxxxxxxxxxx.sqlite         │
-│ Candidate Output  │ data/candidates/RUN-xxxxxxxxxxxx.jsonl  │
-└───────────────────┴─────────────────────────────────────────┘
 ```
 
 ### Commands
@@ -203,17 +243,25 @@ status and structured model outputs.
 | `help` | Show available commands |
 | `last` | Show the last run result |
 | `path` | Show the candidate output path |
+| `llm settings` | Show current LLM URL, model, key status, and timeout |
+| `set llm url ...` | Update the OpenAI-compatible base URL |
+| `set llm model ...` | Update the model name |
+| `set llm api-key ...` | Update the API key for this session |
+| `set llm timeout ...` | Update the request timeout in seconds |
 | `exit` | Exit the CLI |
 
-Phase 2 additional commands:
+System inspection commands:
 
 | Command | Action |
 |---|---|
 | `entities` | List resolved entities from the last run |
 | `relations` | List extracted relations from the last run |
 | `quality` | Show quality scores from the last run |
-| `phase1` / `p1` | Switch to Phase 1 pipeline |
-| `phase2` / `p2` / `full` | Switch to the full Phase 1 + 2 pipeline |
+| `system` / `full` / `phase3` | Confirm the unified system mode |
+
+Legacy debug commands such as `phase1` and `phase2` are still recognized, but
+the chat interface stays on the unified system pipeline and points you to the
+explicit debug override if you really need an internal stage.
 
 You can also enter a local file path:
 
@@ -236,34 +284,96 @@ may contain the source document language.
 
 ## Candidate Output
 
+## Candidate Output
+
 Phase 1 writes candidate records to JSONL files under `data/candidates/` by
 default. Each record includes:
 
 - `run_id`
 - `document_id`
-- `segment_id`
-- `atom`
+- `object_type` — `"atom"`, `"claim"`, `"evidence"`, `"mention"`, etc.
+- `object`
 - `created_at`
 
-## Knowledge Graph Output (Phase 2)
+Phase 3 also writes to a **Candidate Registry** (SQLite, one per run under
+`data/registry/`) for structured querying without reading JSONL files.
+
+## Knowledge Graph Output (Phase 2 & 3)
 
 Phase 2 writes a SQLite knowledge graph under `data/kg/`. Each `.sqlite` file
-contains five tables:
+contains these tables:
 
 | Table | Contents |
 |---|---|
 | `entities` | Resolved entities with canonical text, type, merge count |
 | `entity_segments` | Many-to-many mapping between entities and source segments |
+| `entity_decisions` | Per-mention resolver decisions (LINK / CREATE_CANDIDATE / AMBIGUOUS / REJECT) |
 | `relations` | Subject–predicate–object triples with evidence and confidence |
 | `quality_scores` | Per-atom and per-relation quality scores and issues |
-| `runs` | Run metadata (run_id, document_id, status, counts, timestamp) |
+| `runs` | Run metadata (run_id, document_id, status, counts, timestamp, versions) |
+| `run_audit` | Node execution order, status transitions, policy decisions |
+
+## Schema Candidate Output (Phase 3)
+
+Phase 3 schema proposals are accumulated in a cross-run SQLite store under
+`data/schema_candidates/`. Proposals carry stability signals (occurrence count,
+independent document count, relation pattern consistency, evidence coverage)
+that can be used for automated promotion.
+
+## Data Model (Phase 3)
+
+Phase 3 introduces typed objects with required field validation:
+
+| Object | Key Fields |
+|--------|-----------|
+| `Claim` | `subject`, `predicate`, `object`, `evidence_ids[]`, `conditions[]`, `measurements[]` |
+| `Evidence` | `evidence_id`, `document_id`, `segment_id`, `text`, `span_start`, `span_end` |
+| `Condition` | `parameter`, `value`, `unit` |
+| `Measurement` | `parameter`, `value`, `unit`, `text`, `evidence` |
+| `Mention` | `text`, `normalized_text`, `mention_type`, `evidence` |
+
+Every `Claim` must link to at least one `Evidence` — validation enforces this.
+
+## Resolver Decisions (Phase 3)
+
+The entity resolver produces typed decisions instead of blind merges:
+
+| Decision | Meaning |
+|----------|---------|
+| `LINK` | Matched an existing canonical entity |
+| `CREATE_CANDIDATE` | New entity created from this mention |
+| `AMBIGUOUS` | Cannot disambiguate; held for review |
+| `REJECT` | Text too short or confidence too low |
+
+## Policy Routing (Phase 3)
+
+The policy node evaluates signals (evidence coverage, critic verdict, risk level)
+and routes via conditional edges:
+
+| Action | Description |
+|--------|-------------|
+| `publish` | Low risk, sufficient evidence → write to KG |
+| `candidate` | Medium risk or partial evidence → hold as candidate |
+| `quarantine` | High risk or critic rejection → isolate with reason label |
+| `reject` | Deterministic violations → discard |
 
 ## Tests
 
-Run the local test suite:
+Run the local test suite (uses no-network heuristic extractor):
 
 ```bash
 pytest
 ```
 
-The tests use the no-network heuristic extractor by default.
+To run the DeepSeek-powered end-to-end test:
+
+```bash
+export DEEPSEEK_API_KEY="your-api-key"
+python scripts/e2e_test.py
+```
+
+Or with the API key file:
+
+```bash
+DEEPSEEK_API_KEY=$(cat api.txt) python scripts/e2e_test.py
+```

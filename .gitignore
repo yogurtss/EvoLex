@@ -11,3 +11,4 @@ data/candidates/
 data/kg/
 .env
 api_key.txt
+api.txt

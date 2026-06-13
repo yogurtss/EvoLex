@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from evolex.agents.deepseek_client import LLMConfig
 from evolex.chat.controller import ChatController
 
 COMPLETION_COMMANDS = (
@@ -12,28 +13,50 @@ COMPLETION_COMMANDS = (
     "entities",
     "relations",
     "quality",
-    "phase1",
-    "phase2",
-    "p1",
-    "p2",
-    "full",
+    "llm settings",
+    "set llm url ",
+    "set llm model ",
+    "set llm api-key ",
+    "set llm timeout ",
     "exit",
     "q",
+)
+
+SLASH_COMMANDS = (
+    "/help",
+    "/exit",
+    "/q",
+    "/last",
+    "/path",
+    "/entities",
+    "/relations",
+    "/quality",
+    "/settings",
+    "/config",
+    "/system",
+    "/phase3",
+    "/phase2",
+    "/phase1",
 )
 
 
 def run_repl(
     output_dir: Path | None = None,
-    pipeline: Literal["phase1", "phase1+2"] = "phase1",
+    pipeline: Literal["phase1", "phase1+2", "phase3"] = "phase3",
+    llm_config: LLMConfig | None = None,
 ) -> None:
-    controller = ChatController(output_dir=output_dir, pipeline=pipeline)
+    controller = ChatController(
+        output_dir=output_dir,
+        pipeline=pipeline,
+        llm_config=llm_config,
+    )
     completer = _install_readline_completion(controller.cwd)
 
     try:
         if controller.use_rich:
             _print_welcome_rich(pipeline)
         else:
-            print(f"Agent> EvoLex conversational CLI is ready. Pipeline: {pipeline}.")
+            print(f"Agent> EvoLex conversational CLI is ready. System pipeline: {pipeline}.")
             print("Agent> Paste technical document text, or enter a local file path. Type help for commands.")
 
         while True:
@@ -89,6 +112,7 @@ def _run_with_spinner(controller: ChatController, user_input: str):
             intent = classify_intent(
                 user_input,
                 cwd=controller.cwd,
+                llm_config=controller.llm_config,
                 on_event=lambda stage, message: _update_live(live, _format_event(stage, message), intermediate_lines),
             )
             if intent.action not in ("process_text", "process_file"):
@@ -110,7 +134,8 @@ def _run_with_spinner(controller: ChatController, user_input: str):
             final_text = (
                 f"Agent> Run failed before candidate output was written.\n"
                 f"       error: {exc}\n"
-                f"       hint: unset DEEPSEEK_API_KEY or run with EVOLEX_OFFLINE=1 for local heuristic mode."
+                f"       hint: use `set llm api-key ...`, pass --llm-api-key, export DEEPSEEK_API_KEY, "
+                f"or set EVOLEX_OFFLINE=1 for explicit local debug mode."
             )
         except OSError as exc:
             final_text = (
@@ -171,7 +196,7 @@ def _install_readline_completion(cwd: Path) -> _ReadlineCompleter | None:
 
 
 def _path_friendly_delimiters(delimiters: str) -> str:
-    return "".join(char for char in delimiters if char not in "/\\:")
+    return "".join(char for char in delimiters if char not in "/\\:@")
 
 
 def _readline_completion_candidates(
@@ -198,6 +223,15 @@ def _token_prefix_before_cursor(line_buffer: str, begidx: int) -> str:
 
 
 def _completion_candidates(text: str, cwd: Path) -> list[str]:
+    if text.startswith("/"):
+        command_candidates = [
+            f"{cmd} "
+            for cmd in SLASH_COMMANDS
+            if cmd.startswith(text.lower())
+        ]
+        if command_candidates:
+            return command_candidates
+
     prefix, path_text = _split_path_prefix(text)
     candidates: list[str] = []
 
@@ -220,6 +254,8 @@ def _split_path_prefix(text: str) -> tuple[str, str]:
     for prefix in ("file:", "path:"):
         if lowered.startswith(prefix):
             return text[: len(prefix)], text[len(prefix) :].lstrip()
+    if text.startswith("@"):
+        return "@", text[1:].lstrip()
     return "", text
 
 
@@ -320,7 +356,7 @@ def _print_welcome_rich(pipeline: str) -> None:
     console.print(
         Panel(
             "[bold]EvoLex[/bold] — Technical Document Knowledge System",
-            subtitle=f"Pipeline: {pipeline}",
+            subtitle=f"System pipeline: {pipeline}",
             style="bold green",
         )
     )

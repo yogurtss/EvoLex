@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from evolex.agents.deepseek_client import DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+from evolex.agents.deepseek_client import LLMConfig
 
 ChatAction = Literal[
     "exit",
@@ -19,6 +19,12 @@ ChatAction = Literal[
     "show_entities",
     "show_relations",
     "show_quality",
+    "show_llm_settings",
+    "set_llm_base_url",
+    "set_llm_model",
+    "set_llm_api_key",
+    "set_llm_timeout",
+    "set_pipeline_system",
     "set_pipeline_phase1",
     "set_pipeline_phase2",
     "help",
@@ -41,8 +47,10 @@ PATH_COMMANDS = {"path", "candidate path", "show path"}
 ENTITIES_COMMANDS = {"entities", "show entities", "list entities"}
 RELATIONS_COMMANDS = {"relations", "show relations", "list relations"}
 QUALITY_COMMANDS = {"quality", "show quality", "quality scores"}
+LLM_SETTINGS_COMMANDS = {"settings", "llm", "model", "llm settings", "model settings", "show llm", "show model"}
+PIPELINE_SYSTEM_COMMANDS = {"system", "phase3", "phase 3", "p3", "full", "use system", "use phase3"}
 PIPELINE_PHASE1_COMMANDS = {"phase1", "phase 1", "p1", "use phase1"}
-PIPELINE_PHASE2_COMMANDS = {"phase2", "phase 2", "p2", "full", "use phase2"}
+PIPELINE_PHASE2_COMMANDS = {"phase2", "phase 2", "p2", "use phase2"}
 COMMANDS = tuple(
     sorted(
         EXIT_COMMANDS
@@ -52,6 +60,8 @@ COMMANDS = tuple(
         | ENTITIES_COMMANDS
         | RELATIONS_COMMANDS
         | QUALITY_COMMANDS
+        | LLM_SETTINGS_COMMANDS
+        | PIPELINE_SYSTEM_COMMANDS
         | PIPELINE_PHASE1_COMMANDS
         | PIPELINE_PHASE2_COMMANDS
     )
@@ -81,11 +91,21 @@ def classify_intent(
     cwd: Path | None = None,
     on_event: IntentLogCallback | None = None,
     use_llm: bool = True,
+    llm_config: LLMConfig | None = None,
 ) -> ChatIntent:
     text = user_input.strip()
     normalized = text.lower()
 
     if not text:
+        return ChatIntent("help")
+
+    slash_intent = _classify_slash_command(text)
+    if slash_intent is not None:
+        return slash_intent
+
+    # If text starts with / and isn't a recognized slash command, check whether it
+    # looks like an absolute file path. If not, treat it as an unknown command → help.
+    if text.startswith("/") and not _looks_like_file_path(text[1:]):
         return ChatIntent("help")
 
     if normalized in EXIT_COMMANDS:
@@ -109,11 +129,34 @@ def classify_intent(
     if normalized in QUALITY_COMMANDS:
         return ChatIntent("show_quality", source="command")
 
+    llm_setting_intent = _classify_llm_setting_command(text)
+    if llm_setting_intent is not None:
+        return llm_setting_intent
+
+    if normalized in PIPELINE_SYSTEM_COMMANDS:
+        return ChatIntent("set_pipeline_system", source="command")
+
     if normalized in PIPELINE_PHASE1_COMMANDS:
         return ChatIntent("set_pipeline_phase1", source="command")
 
     if normalized in PIPELINE_PHASE2_COMMANDS:
         return ChatIntent("set_pipeline_phase2", source="command")
+
+    # --- LLM intent parsing (when available) ---
+    # Handles process_file, process_text, and all other intents
+    # with natural language understanding, including mixed Chinese/English,
+    # "help me process this file xxx", and similar fuzzy commands.
+    if use_llm:
+        llm_intent = _classify_intent_with_llm(
+            text,
+            cwd=cwd,
+            on_event=on_event,
+            llm_config=llm_config,
+        )
+        if llm_intent is not None:
+            return llm_intent
+
+    # --- Fallback rules (when LLM is unavailable or fails) ---
 
     explicit_file = _strip_file_prefix(text)
     for candidate_path in _candidate_file_paths(explicit_file, cwd=cwd):
@@ -122,11 +165,6 @@ def classify_intent(
 
     if _looks_like_file_path(explicit_file) and not _looks_like_natural_language_command(text):
         return ChatIntent("process_file", str(_candidate_file_paths(explicit_file, cwd=cwd)[0]), source="path")
-
-    if use_llm:
-        llm_intent = _classify_intent_with_llm(text, cwd=cwd, on_event=on_event)
-        if llm_intent is not None:
-            return llm_intent
 
     natural_language_intent = _classify_natural_language_intent(text, cwd=cwd)
     if natural_language_intent is not None:
@@ -174,6 +212,8 @@ def _strip_file_prefix(text: str) -> str:
     for prefix in ("file:", "path:"):
         if text.lower().startswith(prefix):
             return text[len(prefix) :].strip().strip("\"'")
+    if text.startswith("@"):
+        return text[1:].strip().strip("\"'")
     return text
 
 
@@ -270,12 +310,16 @@ def _classify_view_target(target: str) -> ChatIntent:
         return ChatIntent("show_relations", source="rules")
     if any(keyword in compact for keyword in ("质量", "评分", "分数", "quality", "score")):
         return ChatIntent("show_quality", source="rules")
+    if any(keyword in compact for keyword in ("模型设置", "llmsettings", "modelsettings", "llm", "model")):
+        return ChatIntent("show_llm_settings", source="rules")
     if any(keyword in compact for keyword in ("路径", "输出", "文件", "candidate", "path", "output")):
         return ChatIntent("show_candidate_path", source="rules")
     if any(keyword in compact for keyword in ("结果", "上次", "最近", "last", "result")):
         return ChatIntent("show_last_result", source="rules")
     if any(keyword in compact for keyword in ("帮助", "命令", "help", "command")):
         return ChatIntent("help", source="rules")
+    if any(keyword in compact for keyword in ("系统", "完整系统", "phase3", "p3", "full")):
+        return ChatIntent("set_pipeline_system", source="rules")
     if any(keyword in compact for keyword in ("阶段一", "phase1", "p1")):
         return ChatIntent("set_pipeline_phase1", source="rules")
     if any(keyword in compact for keyword in ("阶段二", "phase2", "p2", "full")):
@@ -300,12 +344,129 @@ def _classify_process_payload(payload: str, cwd: Path | None = None) -> ChatInte
     return ChatIntent("process_text", cleaned, source="rules")
 
 
+def _classify_llm_setting_command(text: str) -> ChatIntent | None:
+    stripped = text.strip()
+    normalized = stripped.lower()
+    if normalized in LLM_SETTINGS_COMMANDS:
+        return ChatIntent("show_llm_settings", source="command")
+
+    prefix_actions: tuple[tuple[tuple[str, ...], str], ...] = (
+        (
+            ("set llm url ", "set llm base url ", "set model url ", "llm url ", "model url "),
+            "set_llm_base_url",
+        ),
+        (
+            ("set llm model ", "set model ", "llm model ", "model name "),
+            "set_llm_model",
+        ),
+        (
+            ("set llm api-key ", "set llm api key ", "set api-key ", "set api key ", "llm api-key ", "llm api key "),
+            "set_llm_api_key",
+        ),
+        (
+            ("set llm timeout ", "set model timeout ", "set timeout ", "llm timeout "),
+            "set_llm_timeout",
+        ),
+    )
+    for prefixes, action in prefix_actions:
+        for prefix in prefixes:
+            if normalized.startswith(prefix):
+                payload = stripped[len(prefix) :].strip()
+                return ChatIntent(action, payload, source="command")  # type: ignore[arg-type]
+
+    if normalized in ("clear llm api-key", "clear llm api key", "clear api-key", "clear api key"):
+        return ChatIntent("set_llm_api_key", "", source="command")
+
+    return None
+
+
+def _classify_slash_command(text: str) -> ChatIntent | None:
+    """Classify a /-prefixed command, or return None to fall through."""
+    if not text.startswith("/"):
+        return None
+    stripped = text[1:].strip()
+    if not stripped:
+        return ChatIntent("help", source="command")
+
+    normalized = stripped.lower()
+
+    SLASH_MAP: dict[str, str] = {
+        "exit": "exit",
+        "quit": "exit",
+        "q": "exit",
+        "bye": "exit",
+        "help": "help",
+        "?": "help",
+        "last": "show_last_result",
+        "result": "show_last_result",
+        "path": "show_candidate_path",
+        "entities": "show_entities",
+        "relations": "show_relations",
+        "quality": "show_quality",
+        "settings": "show_llm_settings",
+        "llm": "show_llm_settings",
+        "model": "show_llm_settings",
+        "system": "set_pipeline_system",
+        "full": "set_pipeline_system",
+        "phase3": "set_pipeline_system",
+        "p3": "set_pipeline_system",
+        "phase2": "set_pipeline_phase2",
+        "p2": "set_pipeline_phase2",
+        "phase1": "set_pipeline_phase1",
+        "p1": "set_pipeline_phase1",
+    }
+
+    if normalized in SLASH_MAP:
+        return ChatIntent(SLASH_MAP[normalized], source="command")
+
+    first_word = normalized.split()[0] if " " in normalized else normalized
+    if first_word in SLASH_MAP:
+        return ChatIntent("help", source="command")
+
+    if normalized == "config" or normalized.startswith("config "):
+        return _classify_config_command(stripped)
+
+    return None
+
+
+def _classify_config_command(stripped: str) -> ChatIntent:
+    """Parse /config subcommands. `stripped` is text after the leading /."""
+    rest = stripped[6:].strip() if stripped.lower().startswith("config") else stripped
+
+    if not rest or rest.lower() == "show":
+        return ChatIntent("show_llm_settings", source="command")
+
+    parts = rest.split(maxsplit=1)
+    subcommand = parts[0].lower()
+    value = parts[1].strip() if len(parts) > 1 else ""
+
+    mapping = {
+        "model": ("set_llm_model", True),
+        "url": ("set_llm_base_url", True),
+        "base-url": ("set_llm_base_url", True),
+        "base_url": ("set_llm_base_url", True),
+        "key": ("set_llm_api_key", False),
+        "api-key": ("set_llm_api_key", False),
+        "api_key": ("set_llm_api_key", False),
+        "timeout": ("set_llm_timeout", True),
+    }
+
+    if subcommand in mapping:
+        action, requires_value = mapping[subcommand]
+        if requires_value and not value:
+            return ChatIntent("show_llm_settings", source="command")
+        return ChatIntent(action, value, source="command")  # type: ignore[arg-type]
+
+    return ChatIntent("show_llm_settings", source="command")
+
+
 def _classify_intent_with_llm(
     text: str,
     cwd: Path | None = None,
     on_event: IntentLogCallback | None = None,
+    llm_config: LLMConfig | None = None,
 ) -> ChatIntent | None:
-    if not _llm_intent_available():
+    if not _llm_intent_available(llm_config):
         if on_event is not None:
             on_event("intent", "LLM intent parser unavailable; using local rules.")
         return None
@@ -314,7 +475,7 @@ def _classify_intent_with_llm(
         on_event("intent", "Asking LLM to classify the user request.")
 
     try:
-        raw = _call_llm_intent_parser(text)
+        raw = _call_llm_intent_parser(text, llm_config=llm_config)
         if on_event is not None:
             on_event("intent", f"LLM intent JSON: {_compact_json(raw)}")
         return _intent_from_llm_payload(raw, original_text=text, cwd=cwd)
@@ -324,23 +485,31 @@ def _classify_intent_with_llm(
         return None
 
 
-def _llm_intent_available() -> bool:
-    return os.environ.get("EVOLEX_OFFLINE") != "1" and bool(os.environ.get("DEEPSEEK_API_KEY"))
+def _llm_intent_available(llm_config: LLMConfig | None = None) -> bool:
+    if os.environ.get("EVOLEX_OFFLINE") == "1":
+        return False
+    config = llm_config or LLMConfig()
+    return bool(config.resolved_api_key())
 
 
-def _call_llm_intent_parser(text: str) -> dict:
+def _call_llm_intent_parser(text: str, llm_config: LLMConfig | None = None) -> dict:
     try:
         from openai import OpenAI
     except ImportError as exc:
         raise RuntimeError("OpenAI SDK is required for LLM intent parsing.") from exc
 
+    config = llm_config or LLMConfig()
+    api_key = config.resolved_api_key()
+    if not api_key:
+        raise RuntimeError("LLM API key is required for LLM intent parsing.")
+
     client = OpenAI(
-        api_key=os.environ["DEEPSEEK_API_KEY"],
-        base_url=DEEPSEEK_BASE_URL,
-        timeout=15,
+        api_key=api_key,
+        base_url=config.base_url,
+        timeout=config.timeout_seconds,
     )
     response = client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
+        model=config.model,
         messages=[
             {
                 "role": "system",
@@ -348,8 +517,11 @@ def _call_llm_intent_parser(text: str) -> dict:
                     "You are an intent parser for a bilingual English/Chinese CLI. "
                     "Return only one JSON object, no Markdown. "
                     "Allowed actions: exit, help, show_last_result, show_candidate_path, "
-                    "show_entities, show_relations, show_quality, set_pipeline_phase1, "
-                    "set_pipeline_phase2, process_file, process_text. "
+                    "show_entities, show_relations, show_quality, show_llm_settings, "
+                    "set_llm_base_url, set_llm_model, set_llm_api_key, set_llm_timeout, "
+                    "set_pipeline_system, set_pipeline_phase1, set_pipeline_phase2, "
+                    "process_file, process_text. "
+                    "For LLM setting changes, put the new value in payload. "
                     "Use process_file when the user asks to parse/process/extract a local path. "
                     "Use process_text when the user provides document text or asks to parse inline text. "
                     "Payload should be the file path or document text only; otherwise empty."

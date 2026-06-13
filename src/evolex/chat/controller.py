@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
 from evolex.chat.intents import ChatIntent, IntentLogCallback, classify_intent
+from evolex.agents.deepseek_client import LLMConfig
+from evolex.config import save_llm_config
 from evolex.graph.runner import (
     Phase1RunResult,
     Phase2RunResult,
+    Phase3RunResult,
     run_pipeline_file,
     run_pipeline_text,
 )
@@ -26,12 +29,14 @@ class ChatController:
         self,
         output_dir: Path | None = None,
         cwd: Path | None = None,
-        pipeline: Literal["phase1", "phase1+2"] = "phase1",
+        pipeline: Literal["phase1", "phase1+2", "phase3"] = "phase3",
+        llm_config: LLMConfig | None = None,
     ) -> None:
         self.output_dir = output_dir
         self.cwd = cwd or Path.cwd()
         self.pipeline = pipeline
-        self.last_result: Phase1RunResult | Phase2RunResult | None = None
+        self.llm_config = llm_config
+        self.last_result: Phase1RunResult | Phase2RunResult | Phase3RunResult | None = None
         self.use_rich = _rich_available()
 
     def handle(
@@ -39,7 +44,12 @@ class ChatController:
         user_input: str,
         on_event: IntentLogCallback | None = None,
     ) -> ChatResponse:
-        intent = classify_intent(user_input, cwd=self.cwd, on_event=on_event)
+        intent = classify_intent(
+            user_input,
+            cwd=self.cwd,
+            on_event=on_event,
+            llm_config=self.llm_config,
+        )
         return self.handle_intent(intent, on_event=on_event)
 
     def handle_intent(
@@ -68,6 +78,26 @@ class ChatController:
         if intent.action == "show_quality":
             return ChatResponse(self._format_quality())
 
+        if intent.action == "show_llm_settings":
+            return ChatResponse(self._format_llm_settings())
+
+        if intent.action == "set_llm_base_url":
+            return self._set_llm_base_url(intent.payload)
+
+        if intent.action == "set_llm_model":
+            return self._set_llm_model(intent.payload)
+
+        if intent.action == "set_llm_api_key":
+            return self._set_llm_api_key(intent.payload)
+
+        if intent.action == "set_llm_timeout":
+            return self._set_llm_timeout(intent.payload)
+
+        if intent.action == "set_pipeline_system":
+            return ChatResponse(
+                f"Agent> Unified system mode is active. Current pipeline: {self.pipeline}."
+            )
+
         if intent.action == "set_pipeline_phase1":
             return self._set_pipeline("phase1")
 
@@ -85,11 +115,74 @@ class ChatController:
     # -- pipeline switching ---------------------------------------------------
 
     def _set_pipeline(self, mode: Literal["phase1", "phase1+2"]) -> ChatResponse:
-        if self.pipeline == mode:
-            return ChatResponse(f"Agent> Already using pipeline: {mode}.")
-        self.pipeline = mode
-        self.last_result = None
-        return ChatResponse(f"Agent> Switched to pipeline: {mode}.")
+        labels = {
+            "phase1": "phase1 (extract-only debug path)",
+            "phase1+2": "phase2 (legacy graph debug path)",
+        }
+        return ChatResponse(
+            "Agent> EvoLex now runs as one complete system by default.\n"
+            f"Agent> Requested {labels[mode]}, but chat stays on the unified system pipeline ({self.pipeline}).\n"
+            "Agent> If you really want an internal stage for debugging, use `evolex chat --pipeline phase1` "
+            "or call the stage-specific runner from Python."
+        )
+
+    # -- LLM settings ---------------------------------------------------------
+
+    def _active_llm_config(self) -> LLMConfig:
+        return self.llm_config or LLMConfig()
+
+    def _set_llm_base_url(self, value: str) -> ChatResponse:
+        base_url = value.strip().rstrip("/")
+        if not base_url.startswith(("http://", "https://")):
+            return ChatResponse("Agent> LLM base URL must start with http:// or https://.")
+        self.llm_config = replace(self._active_llm_config(), base_url=base_url)
+        save_llm_config(self.llm_config)
+        return ChatResponse(f"Agent> LLM base URL updated: {base_url}")
+
+    def _set_llm_model(self, value: str) -> ChatResponse:
+        model = value.strip()
+        if not model:
+            return ChatResponse("Agent> LLM model cannot be empty.")
+        self.llm_config = replace(self._active_llm_config(), model=model)
+        save_llm_config(self.llm_config)
+        return ChatResponse(f"Agent> LLM model updated: {model}")
+
+    def _set_llm_api_key(self, value: str) -> ChatResponse:
+        api_key = value.strip()
+        self.llm_config = replace(self._active_llm_config(), api_key=api_key or None)
+        save_llm_config(self.llm_config)
+        if api_key:
+            return ChatResponse("Agent> LLM API key updated: [configured]")
+        return ChatResponse("Agent> LLM API key reset to the environment/default setting.")
+
+    def _set_llm_timeout(self, value: str) -> ChatResponse:
+        try:
+            timeout = int(value.strip())
+        except ValueError:
+            return ChatResponse("Agent> LLM timeout must be a positive integer number of seconds.")
+        if timeout <= 0:
+            return ChatResponse("Agent> LLM timeout must be greater than zero.")
+        self.llm_config = replace(self._active_llm_config(), timeout_seconds=timeout)
+        save_llm_config(self.llm_config)
+        return ChatResponse(f"Agent> LLM timeout updated: {timeout}s")
+
+    def _format_llm_settings(self) -> str:
+        config = self._active_llm_config()
+        if config.api_key:
+            api_key_status = "configured via CLI"
+        elif config.resolved_api_key():
+            api_key_status = "configured via DEEPSEEK_API_KEY"
+        else:
+            api_key_status = "not configured; runs require a key unless EVOLEX_OFFLINE=1"
+        return "\n".join(
+            [
+                "Agent> LLM settings:",
+                f"       base_url: {config.base_url}",
+                f"       model: {config.model}",
+                f"       api_key: {api_key_status}",
+                f"       timeout: {config.timeout_seconds}s",
+            ]
+        )
 
     # -- processing -----------------------------------------------------------
 
@@ -98,7 +191,7 @@ class ChatController:
         intent: ChatIntent,
         on_node: Callable[[str], None] | None = None,
         on_event: IntentLogCallback | None = None,
-    ) -> Phase1RunResult | Phase2RunResult:
+    ) -> Phase1RunResult | Phase2RunResult | Phase3RunResult:
         if intent.action == "process_text":
             return run_pipeline_text(
                 intent.payload,
@@ -106,6 +199,7 @@ class ChatController:
                 output_dir=self.output_dir,
                 on_node=on_node,
                 on_event=on_event,
+                llm_config=self.llm_config,
             )
         if intent.action == "process_file":
             return run_pipeline_file(
@@ -114,6 +208,7 @@ class ChatController:
                 output_dir=self.output_dir,
                 on_node=on_node,
                 on_event=on_event,
+                llm_config=self.llm_config,
             )
         msg = f"intent is not processable: {intent.action}"
         raise ValueError(msg)
@@ -162,7 +257,7 @@ class ChatController:
 
     # -- result display -------------------------------------------------------
 
-    def _format_result(self, result: Phase1RunResult | Phase2RunResult) -> str:
+    def _format_result(self, result: Phase1RunResult | Phase2RunResult | Phase3RunResult) -> str:
         if self.use_rich:
             return _format_rich_result(result)
         return _format_plain_result(result)
@@ -183,7 +278,7 @@ class ChatController:
         if self.last_result is None:
             entities = self._load_latest_kg_records("entities")
             if not entities:
-                return "Agent> No entities found. Run Phase 2 first, or publish a document to the KG."
+                return "Agent> No entities found. Run the system first, or publish a document to the KG."
             return _format_entity_list(entities, self.use_rich, source=self._latest_kg_path())
         entities = self.last_result.state.get("entities", [])
         if not entities:
@@ -194,7 +289,7 @@ class ChatController:
         if self.last_result is None:
             relations = self._load_latest_kg_records("relations")
             if not relations:
-                return "Agent> No relations found. Run Phase 2 first, or publish a document to the KG."
+                return "Agent> No relations found. Run the system first, or publish a document to the KG."
             return _format_relation_list(relations, self.use_rich, source=self._latest_kg_path())
         relations = self.last_result.state.get("relations", [])
         if not relations:
@@ -205,7 +300,7 @@ class ChatController:
         if self.last_result is None:
             scores = self._load_latest_kg_records("quality")
             if not scores:
-                return "Agent> No quality scores found. Run Phase 2 first, or publish a document to the KG."
+                return "Agent> No quality scores found. Run the system first, or publish a document to the KG."
             return _format_quality_list(scores, self.use_rich, source=self._latest_kg_path())
         scores = self.last_result.state.get("quality_scores", [])
         if not scores:
@@ -240,14 +335,16 @@ class ChatController:
     def _help_text(self) -> str:
         base = (
             "Agent> Paste technical document text, or enter a local file path.\n"
-            "Agent> Available commands: help, last, path, exit.\n"
+            "Agent> Commands: /help, /last, /path, /exit (or: help, last, path, exit).\n"
         )
-        if self.pipeline == "phase1+2":
+        if self.pipeline in ("phase1+2", "phase3"):
             base += (
-                "Agent> Phase II commands: entities, relations, quality.\n"
+                "Agent> System commands: /entities, /relations, /quality, /settings.\n"
             )
         base += (
-            "Agent> Pipeline commands: phase1, phase2.\n"
+            "Agent> File references: file:path, path:path, @/path\n"
+            "Agent> Config: /config show | model <name> | url <url> | key <key> | timeout <sec>\n"
+            "Agent> EvoLex runs one complete system by default.\n"
             f"Agent> Current pipeline: {self.pipeline}."
         )
         return base
@@ -256,17 +353,21 @@ class ChatController:
 # -- plain-text formatting ---------------------------------------------------
 
 
-def _format_plain_result(result: Phase1RunResult | Phase2RunResult) -> str:
+def _format_plain_result(result: Phase1RunResult | Phase2RunResult | Phase3RunResult) -> str:
     lines = [
         "Agent> Completed:",
         f"       status: {result.status}",
         f"       segments: {result.segment_count}",
         f"       semantic_atoms: {result.semantic_atom_count}",
     ]
-    if isinstance(result, Phase2RunResult):
+    if isinstance(result, (Phase2RunResult, Phase3RunResult)):
         lines.append(f"       entities: {result.entity_count}")
         lines.append(f"       relations: {result.relation_count}")
         lines.append(f"       publish: {result.publish_output_path}")
+    if isinstance(result, Phase3RunResult):
+        lines.append(f"       claims: {result.claim_count}")
+        lines.append(f"       evidence: {result.evidence_count}")
+        lines.append(f"       policy: {result.policy_action}")
     lines.append(f"       output: {result.candidate_output_path}")
     return "\n".join(lines)
 
@@ -371,7 +472,7 @@ def _format_quality_list(
 # -- rich formatting ---------------------------------------------------------
 
 
-def _format_rich_result(result: Phase1RunResult | Phase2RunResult) -> str:
+def _format_rich_result(result: Phase1RunResult | Phase2RunResult | Phase3RunResult) -> str:
     from rich.console import Console
     from rich.table import Table
 
@@ -385,10 +486,14 @@ def _format_rich_result(result: Phase1RunResult | Phase2RunResult) -> str:
     table.add_row("Segments", str(result.segment_count))
     table.add_row("Semantic Atoms", str(result.semantic_atom_count))
 
-    if isinstance(result, Phase2RunResult):
+    if isinstance(result, (Phase2RunResult, Phase3RunResult)):
         table.add_row("Entities", str(result.entity_count))
         table.add_row("Relations", str(result.relation_count))
         table.add_row("Publish Output", result.publish_output_path)
+    if isinstance(result, Phase3RunResult):
+        table.add_row("Claims", str(result.claim_count))
+        table.add_row("Evidence", str(result.evidence_count))
+        table.add_row("Policy", result.policy_action)
 
     table.add_row("Candidate Output", result.candidate_output_path)
 
@@ -424,7 +529,8 @@ def _format_error(exc: RuntimeError) -> str:
     return (
         "Agent> Run failed before candidate output was written.\n"
         f"       error: {exc}\n"
-        "       hint: unset DEEPSEEK_API_KEY or run with EVOLEX_OFFLINE=1 for local heuristic mode."
+        "       hint: use `set llm api-key ...`, pass --llm-api-key, export DEEPSEEK_API_KEY, "
+        "or set EVOLEX_OFFLINE=1 for explicit local debug mode."
     )
 
 
