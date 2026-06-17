@@ -21,8 +21,8 @@ def load_config() -> dict[str, Any]:
     """Load LLM config from the config file.
 
     Returns a dict with keys ``base_url``, ``model``, ``api_key``,
-    ``timeout_seconds`` — or an empty dict when the file does not exist
-    or cannot be parsed.
+    ``timeout_seconds``, ``concurrency``, ``profile`` — or an empty dict when the
+    file does not exist or cannot be parsed.
     """
     if not CONFIG_PATH.exists():
         return {}
@@ -34,7 +34,7 @@ def load_config() -> dict[str, Any]:
         for k, v in raw.items():
             if v is None or v == "":
                 continue
-            if k == "timeout_seconds":
+            if k in ("timeout_seconds", "concurrency"):
                 try:
                     result[k] = int(v)
                 except (TypeError, ValueError):
@@ -56,7 +56,10 @@ def save_llm_config(config: LLMConfig) -> None:
         "base_url": config.base_url,
         "model": config.model,
         "timeout_seconds": config.timeout_seconds,
+        "concurrency": config.concurrency,
     }
+    if config.profile:
+        data["profile"] = config.profile
     if config.api_key:
         data["api_key"] = config.api_key
 

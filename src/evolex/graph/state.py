@@ -45,6 +45,12 @@ class GraphState(TypedDict, total=False):
     critic_results: list[dict]
     schema_proposals: list[dict]
     unresolved_terms: list[dict]
+    registry_output_path: str
+    audit_events: list[dict]
+    evaluation_mode: str
+    baseline_run_id: str
+    checkpoint_path: str
+    shadow_report_path: str
 
     # -- shared --
     warnings: list[str]

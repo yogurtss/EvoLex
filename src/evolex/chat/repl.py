@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
+from time import perf_counter
 from typing import Literal
 
 from evolex.agents.deepseek_client import LLMConfig
@@ -13,6 +15,11 @@ COMPLETION_COMMANDS = (
     "entities",
     "relations",
     "quality",
+    "candidates",
+    "quarantine",
+    "policy",
+    "schema",
+    "audit",
     "llm settings",
     "set llm url ",
     "set llm model ",
@@ -31,6 +38,11 @@ SLASH_COMMANDS = (
     "/entities",
     "/relations",
     "/quality",
+    "/candidates",
+    "/quarantine",
+    "/policy",
+    "/schema",
+    "/audit",
     "/settings",
     "/config",
     "/system",
@@ -97,23 +109,23 @@ def _needs_progress(user_input: str) -> bool:
 
 
 def _run_with_spinner(controller: ChatController, user_input: str):
-    """Run controller.handle() with a rich spinner animation and intermediate results."""
+    """Run controller.handle() with a rich live progress panel."""
     from rich.console import Console
     from rich.live import Live
-    from rich.spinner import Spinner
 
     console = Console()
     intermediate_lines: list[str] = []
+    progress = _ProgressState(stages=_pipeline_stages(controller.pipeline))
 
     from evolex.chat.intents import classify_intent
 
-    with Live(Spinner("dots", text=" Processing..."), refresh_per_second=10, console=console) as live:
+    with Live(_render_progress(progress), refresh_per_second=10, console=console) as live:
         try:
             intent = classify_intent(
                 user_input,
                 cwd=controller.cwd,
                 llm_config=controller.llm_config,
-                on_event=lambda stage, message: _update_live(live, _format_event(stage, message), intermediate_lines),
+                on_event=lambda stage, message: _update_progress(live, progress, _format_event(stage, message), intermediate_lines),
             )
             if intent.action not in ("process_text", "process_file"):
                 response = controller.handle_intent(intent)
@@ -123,21 +135,31 @@ def _run_with_spinner(controller: ChatController, user_input: str):
 
             result = controller.process_intent(
                 intent,
-                on_node=lambda node: _update_live(live, _format_event("pipeline", f"Node completed: {node}"), intermediate_lines),
-                on_event=lambda stage, message: _update_live(live, _format_event(stage, message), intermediate_lines),
+                on_node=lambda node: _complete_progress_node(live, progress, node, intermediate_lines),
+                on_event=lambda stage, message: _update_progress(live, progress, _format_event(stage, message), intermediate_lines),
             )
             controller.last_result = result
+            progress.output_path = result.candidate_output_path
+            progress.status = result.status
+            progress.current = "complete"
+            live.update(_render_progress(progress))
             formatted = controller._format_result(result)
             final_text = "\n".join(intermediate_lines) + "\n" + formatted
 
         except RuntimeError as exc:
+            progress.status = "failed"
+            progress.error = str(exc)
+            live.update(_render_progress(progress))
             final_text = (
                 f"Agent> Run failed before candidate output was written.\n"
                 f"       error: {exc}\n"
-                f"       hint: use `set llm api-key ...`, pass --llm-api-key, export DEEPSEEK_API_KEY, "
+                f"       hint: use `set llm api-key ...`, pass --llm-api-key, export EVOLEX_API_KEY or DEEPSEEK_API_KEY, "
                 f"or set EVOLEX_OFFLINE=1 for explicit local debug mode."
             )
         except OSError as exc:
+            progress.status = "failed"
+            progress.error = str(exc)
+            live.update(_render_progress(progress))
             final_text = (
                 f"Agent> Could not read the requested file.\n"
                 f"       path: {intent.payload}\n"
@@ -324,6 +346,97 @@ def _dedupe(values: list[str]) -> list[str]:
             seen.add(value)
             result.append(value)
     return result
+
+
+@dataclass
+class _ProgressState:
+    stages: list[str]
+    started_at: float = field(default_factory=perf_counter)
+    completed: list[str] = field(default_factory=list)
+    events: list[str] = field(default_factory=list)
+    current: str = "classifying"
+    status: str = "running"
+    output_path: str = ""
+    error: str = ""
+
+
+def _pipeline_stages(pipeline: str) -> list[str]:
+    base = ["ingest", "profile", "segment", "extract", "validate", "candidate_store"]
+    if pipeline == "phase1":
+        return base
+    if pipeline == "phase1+2":
+        return base + ["entity_resolve", "relation_extract", "quality_review", "publish"]
+    return base + [
+        "entity_resolve",
+        "relation_extract",
+        "schema_gap",
+        "schema_proposer",
+        "quality_review",
+        "critic",
+        "policy",
+        "quarantine/publish",
+        "registry_finalize",
+    ]
+
+
+def _update_progress(live, progress: _ProgressState, line: str, lines: list[str]) -> None:
+    lines.append(line)
+    progress.events.append(line)
+    progress.events = progress.events[-6:]
+    live.update(_render_progress(progress))
+
+
+def _complete_progress_node(live, progress: _ProgressState, node: str, lines: list[str]) -> None:
+    line = _format_event("pipeline", f"Node completed: {node}")
+    lines.append(line)
+    progress.events.append(line)
+    progress.events = progress.events[-6:]
+    if node in ("quarantine", "publish"):
+        if "quarantine/publish" not in progress.completed:
+            progress.completed.append("quarantine/publish")
+    if node not in progress.completed:
+        progress.completed.append(node)
+    progress.current = node
+    live.update(_render_progress(progress))
+
+
+def _render_progress(progress: _ProgressState):
+    from rich.columns import Columns
+    from rich.panel import Panel
+    from rich.table import Table
+
+    table = Table.grid(padding=(0, 1))
+    table.add_column("state", width=9)
+    table.add_column("node")
+    for stage in progress.stages:
+        if stage in progress.completed:
+            state = "[green]done[/green]"
+        elif progress.current == stage or (
+            progress.current in ("quarantine", "publish") and stage == "quarantine/publish"
+        ):
+            state = "[cyan]active[/cyan]"
+        else:
+            state = "[dim]wait[/dim]"
+        table.add_row(state, stage)
+
+    event_table = Table.grid()
+    elapsed = perf_counter() - progress.started_at
+    event_table.add_row(f"[bold]status[/bold] {progress.status}")
+    event_table.add_row(f"[bold]elapsed[/bold] {elapsed:.1f}s")
+    if progress.output_path:
+        event_table.add_row(f"[bold]output[/bold] {progress.output_path}")
+    if progress.error:
+        event_table.add_row(f"[red]error[/red] {progress.error[:120]}")
+    if progress.events:
+        event_table.add_row("")
+        for event in progress.events[-5:]:
+            event_table.add_row(event[:120])
+
+    return Panel(
+        Columns([table, event_table], equal=False, expand=True),
+        title="EvoLex Pipeline Progress",
+        border_style="cyan",
+    )
 
 
 def _update_live(live: Live, node_name: str, lines: list[str]) -> None:

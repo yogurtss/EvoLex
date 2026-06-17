@@ -69,8 +69,21 @@ class CandidateRegistry:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                node_name TEXT NOT NULL,
+                status_before TEXT,
+                status_after TEXT,
+                decision TEXT,
+                warnings TEXT,
+                elapsed_seconds REAL,
+                created_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_candidates_run ON candidates(run_id);
             CREATE INDEX IF NOT EXISTS idx_quarantine_run ON quarantine_records(run_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_run ON audit_events(run_id);
             """
         )
 
@@ -129,6 +142,26 @@ class CandidateRegistry:
         finally:
             conn.close()
 
+    def put_audit_event(self, run_id: str, event: dict) -> None:
+        conn = self._connect(run_id)
+        try:
+            conn.execute(
+                "INSERT INTO audit_events (run_id, node_name, status_before, status_after, decision, warnings, elapsed_seconds, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    event.get("node_name", ""),
+                    event.get("status_before"),
+                    event.get("status_after"),
+                    event.get("decision"),
+                    event.get("warnings", ""),
+                    event.get("elapsed_seconds"),
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     # -- readers ---------------------------------------------------------------
 
     def get_recent_candidates(self, limit: int = 10) -> list[dict[str, Any]]:
@@ -167,6 +200,25 @@ class CandidateRegistry:
         )
         return [
             {"run_id": r[0], "decision": json.loads(r[1]), "created_at": r[2]}
+            for r in rows
+        ]
+
+    def get_recent_audit_events(self, limit: int = 20) -> list[dict[str, Any]]:
+        rows = self._query_all(
+            "SELECT run_id, node_name, status_before, status_after, decision, warnings, elapsed_seconds, created_at FROM audit_events ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        return [
+            {
+                "run_id": r[0],
+                "node_name": r[1],
+                "status_before": r[2],
+                "status_after": r[3],
+                "decision": r[4],
+                "warnings": r[5],
+                "elapsed_seconds": r[6],
+                "created_at": r[7],
+            }
             for r in rows
         ]
 

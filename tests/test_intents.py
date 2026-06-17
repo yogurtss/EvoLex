@@ -75,6 +75,19 @@ def test_llm_settings_commands() -> None:
     assert timeout_intent.payload == "45"
 
 
+def test_registry_query_commands() -> None:
+    assert classify_intent("candidates").action == "show_candidates"
+    assert classify_intent("quarantine").action == "show_quarantine"
+    assert classify_intent("policy").action == "show_policy"
+    assert classify_intent("schema").action == "show_schema"
+    assert classify_intent("audit").action == "show_audit"
+    assert classify_intent("/candidates").action == "show_candidates"
+    assert classify_intent("/quarantine").action == "show_quarantine"
+    assert classify_intent("/policy").action == "show_policy"
+    assert classify_intent("/schema").action == "show_schema"
+    assert classify_intent("/audit").action == "show_audit"
+
+
 def test_pipeline_switch_commands() -> None:
     assert classify_intent("system").action == "set_pipeline_system"
     assert classify_intent("phase3").action == "set_pipeline_system"
@@ -256,6 +269,12 @@ def test_config_timeout() -> None:
     intent = classify_intent("/config timeout 45")
     assert intent.action == "set_llm_timeout"
     assert intent.payload == "45"
+
+
+def test_config_concurrency() -> None:
+    intent = classify_intent("/config concurrency 4")
+    assert intent.action == "set_llm_concurrency"
+    assert intent.payload == "4"
 
 
 def test_config_model_without_value_shows_settings() -> None:

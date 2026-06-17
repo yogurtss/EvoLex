@@ -7,9 +7,11 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
+LOCAL_API_KEY = "local-openai-compatible"
 ModelLogCallback = Callable[[str, str], None]
 
 
@@ -19,9 +21,65 @@ class LLMConfig:
     model: str = DEEPSEEK_MODEL
     api_key: str | None = None
     timeout_seconds: int = 30
+    concurrency: int = 4
+    profile: str | None = None
 
     def resolved_api_key(self) -> str | None:
-        return self.api_key or os.environ.get("DEEPSEEK_API_KEY")
+        return self.api_key or os.environ.get("EVOLEX_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
+
+    def api_key_source(self) -> str:
+        if self.api_key:
+            return "configured via CLI"
+        if os.environ.get("EVOLEX_API_KEY"):
+            return "configured via EVOLEX_API_KEY"
+        if os.environ.get("DEEPSEEK_API_KEY"):
+            return "configured via DEEPSEEK_API_KEY"
+        if self.allows_local_keyless():
+            return "not configured; local/generic key optional"
+        return "not configured; runs require a key unless EVOLEX_OFFLINE=1"
+
+    def inferred_profile(self) -> str:
+        if self.profile:
+            return self.profile.strip().lower()
+        base_url = self.base_url.lower()
+        model = self.model.lower()
+        if "deepseek" in base_url or model.startswith("deepseek"):
+            return "deepseek"
+        return "generic"
+
+    def allows_local_keyless(self) -> bool:
+        if self.inferred_profile() == "deepseek":
+            return False
+        host = (urlparse(self.base_url).hostname or "").lower()
+        return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+    def effective_api_key(self) -> str | None:
+        key = self.resolved_api_key()
+        if key:
+            return key
+        if self.allows_local_keyless():
+            return LOCAL_API_KEY
+        return None
+
+
+def chat_completion_kwargs(
+    config: LLMConfig,
+    messages: list[dict[str, str]],
+    *,
+    reasoning_effort: str | None = None,
+    thinking_type: str | None = None,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": config.model,
+        "messages": messages,
+        "stream": False,
+    }
+    if config.inferred_profile() == "deepseek":
+        if reasoning_effort:
+            kwargs["reasoning_effort"] = reasoning_effort
+        if thinking_type:
+            kwargs["extra_body"] = {"thinking": {"type": thinking_type}}
+    return kwargs
 
 
 class BaseExtractor(ABC):
@@ -259,7 +317,7 @@ def _infer_parameter(unit: str) -> str:
     return "measurement"
 
 
-class DeepSeekExtractor(TypedExtractor):
+class OpenAICompatibleExtractor(TypedExtractor):
     uses_llm = True
     supports_relation_extraction = True
 
@@ -269,18 +327,29 @@ class DeepSeekExtractor(TypedExtractor):
         base_url: str = DEEPSEEK_BASE_URL,
         model: str = DEEPSEEK_MODEL,
         timeout_seconds: int = 30,
+        concurrency: int = 4,
         on_event: ModelLogCallback | None = None,
+        profile: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.concurrency = max(1, int(concurrency))
         self.on_event = on_event
+        self.config = LLMConfig(
+            base_url=self.base_url,
+            model=self.model,
+            api_key=self.api_key,
+            timeout_seconds=self.timeout_seconds,
+            concurrency=self.concurrency,
+            profile=profile,
+        )
         try:
             from openai import OpenAI
         except ImportError as exc:
             raise RuntimeError(
-                "OpenAI SDK is required for DeepSeek API calls. "
+                "OpenAI SDK is required for LLM API calls. "
                 "Install dependencies with `conda env update -f environment.yml --prune`."
             ) from exc
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=timeout_seconds)
@@ -289,8 +358,9 @@ class DeepSeekExtractor(TypedExtractor):
         self._emit("llm", f"Semantic extraction request started. chars={len(segment_text)}")
         try:
             response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+                **chat_completion_kwargs(
+                    self._active_config(),
+                    [
                     {
                         "role": "system",
                         "content": (
@@ -305,14 +375,14 @@ class DeepSeekExtractor(TypedExtractor):
                         "role": "user",
                         "content": f"Extract Phase 1 semantic atoms from this segment:\n{segment_text}",
                     },
-                ],
-                stream=False,
-                reasoning_effort="high",
-                extra_body={"thinking": {"type": "enabled"}},
+                    ],
+                    reasoning_effort="high",
+                    thinking_type="enabled",
+                )
             )
         except Exception as exc:
             raise RuntimeError(
-                f"DeepSeek API request failed: {_sanitize_error_message(str(exc))}"
+                f"LLM API request failed: {_sanitize_error_message(str(exc))}"
             ) from exc
 
         content = response.choices[0].message.content or ""
@@ -356,8 +426,9 @@ class DeepSeekExtractor(TypedExtractor):
 
         try:
             response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+                **chat_completion_kwargs(
+                    self._active_config(),
+                    [
                     {
                         "role": "system",
                         "content": (
@@ -377,14 +448,14 @@ class DeepSeekExtractor(TypedExtractor):
                             + "\n".join(atom_lines)
                         ),
                     },
-                ],
-                stream=False,
-                reasoning_effort="high",
-                extra_body={"thinking": {"type": "enabled"}},
+                    ],
+                    reasoning_effort="high",
+                    thinking_type="enabled",
+                )
             )
         except Exception as exc:
             raise RuntimeError(
-                f"DeepSeek relation extraction failed: {_sanitize_error_message(str(exc))}"
+                f"LLM relation extraction failed: {_sanitize_error_message(str(exc))}"
             ) from exc
 
         content = response.choices[0].message.content or ""
@@ -402,6 +473,26 @@ class DeepSeekExtractor(TypedExtractor):
         if self.on_event is not None:
             self.on_event(stage, message)
 
+    def _active_config(self) -> LLMConfig:
+        config = getattr(self, "config", None)
+        if isinstance(config, LLMConfig):
+            return config
+        return LLMConfig(
+            base_url=getattr(self, "base_url", DEEPSEEK_BASE_URL),
+            model=getattr(self, "model", DEEPSEEK_MODEL),
+            api_key=getattr(self, "api_key", None),
+            timeout_seconds=getattr(self, "timeout_seconds", 30),
+            concurrency=getattr(self, "concurrency", 1),
+        )
+
+
+class DeepSeekExtractor(OpenAICompatibleExtractor):
+    """Backward-compatible DeepSeek-named extractor.
+
+    The implementation is OpenAI-compatible; DeepSeek-specific request fields
+    are enabled only when the config/profile resolves to ``deepseek``.
+    """
+
 
 def get_default_extractor(
     on_event: ModelLogCallback | None = None,
@@ -413,18 +504,21 @@ def get_default_extractor(
         return HeuristicTypedExtractor() if typed else HeuristicExtractor()
 
     config = llm_config or LLMConfig()
-    api_key = config.resolved_api_key()
+    api_key = config.effective_api_key()
     if api_key:
         return DeepSeekExtractor(
             api_key=api_key,
             base_url=config.base_url,
             model=config.model,
             timeout_seconds=config.timeout_seconds,
+            concurrency=config.concurrency,
             on_event=on_event,
+            profile=config.profile,
         )
     raise RuntimeError(
         "LLM API key is required. Set it with `set llm api-key ...` in the CLI, "
-        "pass `--llm-api-key`, export DEEPSEEK_API_KEY, or set EVOLEX_OFFLINE=1 "
+        "pass `--llm-api-key`, export EVOLEX_API_KEY or DEEPSEEK_API_KEY, "
+        "or set EVOLEX_OFFLINE=1 "
         "for explicit local debug mode."
     )
 

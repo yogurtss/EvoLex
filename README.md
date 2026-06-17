@@ -89,8 +89,8 @@ project in editable mode with the `dev` extra.
 
 ### Rich (optional)
 
-Install `rich` for styled terminal output, progress spinners, and live
-intermediate results:
+Install `rich` for styled terminal output, a live pipeline progress panel, and
+intermediate model/node events:
 
 ```bash
 pip install ".[rich]"
@@ -98,11 +98,12 @@ pip install ".[rich]"
 
 Without `rich`, the CLI falls back to plain-text output and no animations.
 
-## DeepSeek API
+## LLM API
 
 The extractor is LLM-first. By default it uses the DeepSeek OpenAI-compatible
-chat API, and runs require an API key unless explicit offline debug mode is
-enabled:
+chat API. DeepSeek keeps its provider-specific thinking parameters, while local
+OpenAI-compatible models such as Qwen or a future Minimax endpoint use a generic
+request body.
 
 ```bash
 export DEEPSEEK_API_KEY="your-api-key"
@@ -112,6 +113,7 @@ Runtime settings:
 
 - `base_url`: `https://api.deepseek.com`
 - `model`: `deepseek-v4-flash`
+- `concurrency`: `4` segment-level extraction calls
 
 You can override these settings when starting the CLI:
 
@@ -119,7 +121,17 @@ You can override these settings when starting the CLI:
 evolex chat \
   --llm-base-url https://api.deepseek.com \
   --llm-model deepseek-v4-flash \
-  --llm-api-key "$DEEPSEEK_API_KEY"
+  --llm-api-key "$DEEPSEEK_API_KEY" \
+  --llm-concurrency 4
+```
+
+For a local OpenAI-compatible model, point EvoLex at the local server and set the
+model name. Local generic endpoints on `localhost` / `127.0.0.1` do not require a
+real API key:
+
+```text
+EvoLex> set llm url http://127.0.0.1:8000/v1
+EvoLex> set llm model qwen3.5-397b
 ```
 
 You can also inspect and change them inside the interactive CLI:
@@ -130,7 +142,12 @@ EvoLex> set llm url https://api.deepseek.com
 EvoLex> set llm model deepseek-v4-flash
 EvoLex> set llm api-key sk-...
 EvoLex> set llm timeout 45
+EvoLex> set llm concurrency 4
 ```
+
+EvoLex parallelizes segment-level extraction calls up to the configured
+concurrency. Relation extraction stays as a single aggregate call so it can use
+the full resolved entity set.
 
 The API path uses the official OpenAI SDK style:
 
@@ -138,13 +155,15 @@ The API path uses the official OpenAI SDK style:
 from openai import OpenAI
 
 client = OpenAI(
-    api_key=os.environ.get("DEEPSEEK_API_KEY"),
+    api_key=os.environ.get("EVOLEX_API_KEY") or os.environ.get("DEEPSEEK_API_KEY"),
     base_url="https://api.deepseek.com",
 )
 ```
 
 EvoLex passes `reasoning_effort="high"` and
-`extra_body={"thinking": {"type": "enabled"}}` for real DeepSeek extraction.
+`extra_body={"thinking": {"type": "enabled"}}` only for the DeepSeek profile.
+Generic OpenAI-compatible models receive only `model`, `messages`, and
+`stream=False`.
 
 Do not commit API keys. The repository intentionally reads the key only from the
 environment.
@@ -200,6 +219,7 @@ Agent> Node completed: quality_review
 Agent> Node completed: critic
 Agent> Node completed: policy
 Agent> Node completed: publish
+Agent> Node completed: registry_finalize
 Agent> Completed:
        status: published
        segments: 1
@@ -229,7 +249,9 @@ EvoLex> 我想解析 examples/technical_note.txt
 EvoLex> can you process examples/technical_note.txt
 ```
 
-During longer runs, the CLI separates progress logs by stage:
+During longer runs, the CLI separates progress logs by stage. With `rich`
+installed, these appear in a live progress panel with node status, elapsed time,
+recent events, and output paths:
 
 - `[intent]` — command understanding and LLM intent JSON.
 - `[llm]` — model request/output summaries from extraction steps.
@@ -243,7 +265,7 @@ status and structured model outputs.
 | `help` | Show available commands |
 | `last` | Show the last run result |
 | `path` | Show the candidate output path |
-| `llm settings` | Show current LLM URL, model, key status, and timeout |
+| `llm settings` | Show current LLM profile, URL, model, key status, and timeout |
 | `set llm url ...` | Update the OpenAI-compatible base URL |
 | `set llm model ...` | Update the model name |
 | `set llm api-key ...` | Update the API key for this session |
@@ -257,6 +279,11 @@ System inspection commands:
 | `entities` | List resolved entities from the last run |
 | `relations` | List extracted relations from the last run |
 | `quality` | Show quality scores from the last run |
+| `candidates` | Show recent candidate objects from the registry |
+| `quarantine` | Show recent quarantine records and reasons |
+| `policy` | Show recent policy decisions |
+| `schema` | Show schema proposals accumulated across runs |
+| `audit` | Show recent node audit events |
 | `system` / `full` / `phase3` | Confirm the unified system mode |
 
 Legacy debug commands such as `phase1` and `phase2` are still recognized, but
@@ -267,6 +294,41 @@ You can also enter a local file path:
 
 ```text
 EvoLex> examples/technical_note.txt
+```
+
+## Evaluation And Replay
+
+Run the local frozen corpus regression baseline:
+
+```bash
+evolex eval frozen
+```
+
+Run shadow evaluation. Shadow mode writes reports and candidate/registry
+artifacts under evaluation directories, but the publish node does not write a
+production KG:
+
+```bash
+evolex eval shadow
+```
+
+Normal chat runs write checkpoints after each graph node. You can replay a run
+or resume the latest checkpoint for a thread:
+
+```bash
+evolex run replay --run-id RUN-xxxxxxxxxxxx
+evolex run resume --thread-id document:DOC-xxxxxxxxxxxx:v3
+```
+
+Schema proposals can be promoted through automatic gates. A proposal must have
+enough cross-run support and must not be blocked by shadow/frozen governance
+signals:
+
+```bash
+evolex schema candidates
+evolex schema promote-ready
+evolex schema promote --proposal-id scp-xxxxxxxx
+evolex schema promotions
 ```
 
 ## English Prompt And KG Policy
@@ -281,8 +343,6 @@ KG-facing fields use English-only schema labels and normalized values:
 
 The `evidence` field preserves the original source span for traceability, so it
 may contain the source document language.
-
-## Candidate Output
 
 ## Candidate Output
 
@@ -318,7 +378,9 @@ contains these tables:
 Phase 3 schema proposals are accumulated in a cross-run SQLite store under
 `data/schema_candidates/`. Proposals carry stability signals (occurrence count,
 independent document count, relation pattern consistency, evidence coverage)
-that can be used for automated promotion.
+that can be used for automated promotion. Promotion updates only schema
+candidate metadata and the promotion ledger; it does not rewrite the production
+KG.
 
 ## Data Model (Phase 3)
 

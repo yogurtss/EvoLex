@@ -15,6 +15,12 @@ def make_publish_node(output_dir: Path | None = None):
     kg_dir = output_dir or DEFAULT_KG_DIR
 
     def publish_node(state: GraphState) -> dict:
+        if state.get("evaluation_mode") == "shadow":
+            return {
+                "publish_output_path": "",
+                "status": state.get("status", "candidate"),
+            }
+
         kg_dir.mkdir(parents=True, exist_ok=True)
         db_path = kg_dir / f"{state['run_id']}.sqlite"
         created_at = datetime.now(UTC).isoformat()

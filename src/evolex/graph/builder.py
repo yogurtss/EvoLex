@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from time import perf_counter
 from typing import Literal
 
 from evolex.agents.deepseek_client import BaseExtractor, LLMConfig, get_default_extractor
@@ -16,10 +17,12 @@ from evolex.nodes.profile import profile_node
 from evolex.nodes.publish import make_publish_node
 from evolex.nodes.quality_review import make_quality_review_node
 from evolex.nodes.relation_extract import make_relation_extract_node
+from evolex.nodes.registry_finalize import make_registry_finalize_node
 from evolex.nodes.schema_gap import schema_gap_node
 from evolex.nodes.schema_proposer import schema_proposer_node
 from evolex.nodes.segment import segment_node
 from evolex.nodes.validate import validate_node
+from evolex.repositories.evaluation import CheckpointStore
 
 NodeCallback = Callable[[str], None]
 GraphLogCallback = Callable[[str, str], None]
@@ -68,6 +71,7 @@ def _pipeline_nodes(
             ("policy", policy_node),
             ("quarantine", _quarantine_node),
             ("publish", make_publish_node(output_dir)),
+            ("registry_finalize", make_registry_finalize_node(output_dir)),
         ]
     )
     return base
@@ -112,6 +116,66 @@ def route_after_policy(state: GraphState) -> str:
     return "candidate"
 
 
+def _append_audit_event(
+    state: GraphState,
+    *,
+    node_name: str,
+    status_before: str | None,
+    status_after: str | None,
+    warnings_before: list[str],
+    elapsed_seconds: float | None = None,
+) -> None:
+    warnings_after = list(state.get("warnings", []))
+    new_warnings = warnings_after[len(warnings_before):]
+    decision = None
+    if node_name == "policy" and state.get("policy_decisions"):
+        decision = state["policy_decisions"][0].get("action")
+    event = {
+        "node_name": node_name,
+        "status_before": status_before,
+        "status_after": status_after,
+        "decision": decision,
+        "warnings": ", ".join(str(w) for w in new_warnings),
+        "elapsed_seconds": elapsed_seconds,
+    }
+    state.setdefault("audit_events", []).append(event)
+
+
+def _with_audit(
+    node_name: str,
+    node_func: NodeFunc,
+    checkpoint_store: CheckpointStore | None = None,
+) -> NodeFunc:
+    def wrapped(state: GraphState) -> dict:
+        next_state: GraphState = dict(state)
+        status_before = next_state.get("status")
+        warnings_before = list(next_state.get("warnings", []))
+        start = perf_counter()
+        update = node_func(state)
+        elapsed = perf_counter() - start
+        next_state.update(update)
+        _append_audit_event(
+            next_state,
+            node_name=node_name,
+            status_before=status_before,
+            status_after=next_state.get("status"),
+            warnings_before=warnings_before,
+            elapsed_seconds=elapsed,
+        )
+        update["audit_events"] = next_state.get("audit_events", [])
+        if checkpoint_store is not None:
+            next_state["checkpoint_path"] = str(checkpoint_store.db_path)
+            update["checkpoint_path"] = str(checkpoint_store.db_path)
+            checkpoint_store.put_checkpoint(
+                next_state,
+                node_name=node_name,
+                step_index=len(next_state.get("audit_events", [])),
+            )
+        return update
+
+    return wrapped
+
+
 # -- graph runners -------------------------------------------------------------
 
 
@@ -129,6 +193,7 @@ class PipelineGraph:
         pipeline: PipelineMode = "phase1",
         on_event: GraphLogCallback | None = None,
         llm_config: LLMConfig | None = None,
+        checkpoint_store: CheckpointStore | None = None,
     ) -> None:
         self.extractor = extractor or get_default_extractor(
             on_event=on_event,
@@ -137,7 +202,10 @@ class PipelineGraph:
         )
         self.output_dir = output_dir
         self.pipeline = pipeline
+        self.checkpoint_store = checkpoint_store
+        self._step_index = 0
         self.nodes = _pipeline_nodes(self.extractor, output_dir, pipeline)
+        self.node_map = dict(self.nodes)
 
     def invoke(
         self,
@@ -145,9 +213,118 @@ class PipelineGraph:
         on_node: NodeCallback | None = None,
     ) -> GraphState:
         state: GraphState = dict(initial_state)
+        if self.pipeline == "phase3":
+            return self._invoke_phase3(state, on_node=on_node)
         for node_name, node_func in self.nodes:
-            update = node_func(state)
-            state.update(update)
+            self._run_node(state, node_name, node_func)
+            if on_node is not None:
+                on_node(node_name)
+        return state
+
+    def _invoke_phase3(
+        self,
+        state: GraphState,
+        on_node: NodeCallback | None = None,
+    ) -> GraphState:
+        for node_name, node_func in self.nodes:
+            if node_name in {"quarantine", "publish", "registry_finalize"}:
+                continue
+            self._run_node(state, node_name, node_func)
+            if on_node is not None:
+                on_node(node_name)
+            if node_name == "quality_review" and route_after_validate(state) == "quarantine":
+                self._run_node(state, "quarantine", self.node_map["quarantine"])
+                if on_node is not None:
+                    on_node("quarantine")
+                break
+            if node_name == "policy":
+                action = route_after_policy(state)
+                if action == "publish":
+                    self._run_node(state, "publish", self.node_map["publish"])
+                    if on_node is not None:
+                        on_node("publish")
+                elif action == "quarantine":
+                    self._run_node(state, "quarantine", self.node_map["quarantine"])
+                    if on_node is not None:
+                        on_node("quarantine")
+                break
+        self._run_node(state, "registry_finalize", self.node_map["registry_finalize"])
+        if on_node is not None:
+            on_node("registry_finalize")
+        return state
+
+    def _run_node(self, state: GraphState, node_name: str, node_func: NodeFunc) -> None:
+        status_before = state.get("status")
+        warnings_before = list(state.get("warnings", []))
+        start = perf_counter()
+        update = node_func(state)
+        elapsed = perf_counter() - start
+        state.update(update)
+        _append_audit_event(
+            state,
+            node_name=node_name,
+            status_before=status_before,
+            status_after=state.get("status"),
+            warnings_before=warnings_before,
+            elapsed_seconds=elapsed,
+        )
+        self._step_index += 1
+        self._save_checkpoint(state, node_name)
+
+    def _save_checkpoint(self, state: GraphState, node_name: str) -> None:
+        if self.checkpoint_store is None:
+            return
+        state["checkpoint_path"] = str(self.checkpoint_store.db_path)
+        self.checkpoint_store.put_checkpoint(
+            state,
+            node_name=node_name,
+            step_index=self._step_index,
+        )
+
+    def resume_from_checkpoint(
+        self,
+        checkpoint: dict,
+        on_node: NodeCallback | None = None,
+    ) -> GraphState:
+        """Continue this deterministic runner after a stored checkpoint."""
+        state: GraphState = dict(checkpoint["state"])
+        node_names = [name for name, _ in self.nodes]
+        completed = checkpoint.get("node_name", "")
+        start_index = node_names.index(completed) + 1 if completed in node_names else 0
+        self._step_index = int(checkpoint.get("step_index", start_index))
+
+        if self.pipeline == "phase3":
+            tail = [(name, fn) for name, fn in self.nodes[start_index:]]
+            for node_name, node_func in tail:
+                if node_name in {"quarantine", "publish", "registry_finalize"}:
+                    continue
+                self._run_node(state, node_name, node_func)
+                if on_node is not None:
+                    on_node(node_name)
+                if node_name == "quality_review" and route_after_validate(state) == "quarantine":
+                    self._run_node(state, "quarantine", self.node_map["quarantine"])
+                    if on_node is not None:
+                        on_node("quarantine")
+                    break
+                if node_name == "policy":
+                    action = route_after_policy(state)
+                    if action == "publish":
+                        self._run_node(state, "publish", self.node_map["publish"])
+                        if on_node is not None:
+                            on_node("publish")
+                    elif action == "quarantine":
+                        self._run_node(state, "quarantine", self.node_map["quarantine"])
+                        if on_node is not None:
+                            on_node("quarantine")
+                    break
+            if start_index <= node_names.index("registry_finalize"):
+                self._run_node(state, "registry_finalize", self.node_map["registry_finalize"])
+                if on_node is not None:
+                    on_node("registry_finalize")
+            return state
+
+        for node_name, node_func in self.nodes[start_index:]:
+            self._run_node(state, node_name, node_func)
             if on_node is not None:
                 on_node(node_name)
         return state
@@ -162,6 +339,7 @@ class Phase1Graph(PipelineGraph):
         output_dir: Path | None = None,
         on_event: GraphLogCallback | None = None,
         llm_config: LLMConfig | None = None,
+        checkpoint_store: CheckpointStore | None = None,
     ) -> None:
         super().__init__(
             extractor=extractor,
@@ -169,6 +347,7 @@ class Phase1Graph(PipelineGraph):
             pipeline="phase1",
             on_event=on_event,
             llm_config=llm_config,
+            checkpoint_store=checkpoint_store,
         )
 
 
@@ -181,6 +360,7 @@ class Phase2Graph(PipelineGraph):
         output_dir: Path | None = None,
         on_event: GraphLogCallback | None = None,
         llm_config: LLMConfig | None = None,
+        checkpoint_store: CheckpointStore | None = None,
     ) -> None:
         super().__init__(
             extractor=extractor,
@@ -188,6 +368,7 @@ class Phase2Graph(PipelineGraph):
             pipeline="phase1+2",
             on_event=on_event,
             llm_config=llm_config,
+            checkpoint_store=checkpoint_store,
         )
 
 
@@ -200,6 +381,7 @@ class Phase3Graph(PipelineGraph):
         output_dir: Path | None = None,
         on_event: GraphLogCallback | None = None,
         llm_config: LLMConfig | None = None,
+        checkpoint_store: CheckpointStore | None = None,
     ) -> None:
         super().__init__(
             extractor=extractor,
@@ -207,6 +389,7 @@ class Phase3Graph(PipelineGraph):
             pipeline="phase3",
             on_event=on_event,
             llm_config=llm_config,
+            checkpoint_store=checkpoint_store,
         )
 
 
@@ -220,6 +403,7 @@ class LangGraphPipelineRunner:
         pipeline: PipelineMode = "phase1",
         on_event: GraphLogCallback | None = None,
         llm_config: LLMConfig | None = None,
+        checkpoint_store: CheckpointStore | None = None,
     ) -> None:
         from langgraph.graph import END, START, StateGraph
 
@@ -231,7 +415,7 @@ class LangGraphPipelineRunner:
         graph = StateGraph(GraphState)
         nodes = _pipeline_nodes(extractor, output_dir, pipeline)
         for node_name, node_func in nodes:
-            graph.add_node(node_name, node_func)
+            graph.add_node(node_name, _with_audit(node_name, node_func, checkpoint_store))
 
         if pipeline == "phase3":
             # Phase 3: linear up to quality_review, then conditional
@@ -254,13 +438,14 @@ class LangGraphPipelineRunner:
                 route_after_policy,
                 {
                     "publish": "publish",
-                    "candidate": END,
+                    "candidate": "registry_finalize",
                     "quarantine": "quarantine",
-                    "reject": END,
+                    "reject": "registry_finalize",
                 },
             )
-            graph.add_edge("publish", END)
-            graph.add_edge("quarantine", END)
+            graph.add_edge("publish", "registry_finalize")
+            graph.add_edge("quarantine", "registry_finalize")
+            graph.add_edge("registry_finalize", END)
         else:
             # Linear for phase1 and phase1+2
             graph.add_edge(START, nodes[0][0])
@@ -296,6 +481,7 @@ class LangGraphPhase1Runner(LangGraphPipelineRunner):
         output_dir: Path | None = None,
         on_event: GraphLogCallback | None = None,
         llm_config: LLMConfig | None = None,
+        checkpoint_store: CheckpointStore | None = None,
     ) -> None:
         super().__init__(
             extractor=extractor,
@@ -303,6 +489,7 @@ class LangGraphPhase1Runner(LangGraphPipelineRunner):
             pipeline="phase1",
             on_event=on_event,
             llm_config=llm_config,
+            checkpoint_store=checkpoint_store,
         )
 
 
@@ -315,6 +502,7 @@ class LangGraphPhase2Runner(LangGraphPipelineRunner):
         output_dir: Path | None = None,
         on_event: GraphLogCallback | None = None,
         llm_config: LLMConfig | None = None,
+        checkpoint_store: CheckpointStore | None = None,
     ) -> None:
         super().__init__(
             extractor=extractor,
@@ -322,6 +510,7 @@ class LangGraphPhase2Runner(LangGraphPipelineRunner):
             pipeline="phase1+2",
             on_event=on_event,
             llm_config=llm_config,
+            checkpoint_store=checkpoint_store,
         )
 
 
@@ -334,6 +523,7 @@ def build_graph(
     pipeline: PipelineMode = "phase1",
     on_event: GraphLogCallback | None = None,
     llm_config: LLMConfig | None = None,
+    checkpoint_store: CheckpointStore | None = None,
 ) -> PipelineGraph | LangGraphPipelineRunner:
     try:
         import langgraph  # noqa: F401
@@ -348,6 +538,7 @@ def build_graph(
             output_dir=output_dir,
             on_event=on_event,
             llm_config=llm_config,
+            checkpoint_store=checkpoint_store,
         )
 
     return LangGraphPipelineRunner(
@@ -356,6 +547,7 @@ def build_graph(
         pipeline=pipeline,
         on_event=on_event,
         llm_config=llm_config,
+        checkpoint_store=checkpoint_store,
     )
 
 
@@ -364,10 +556,12 @@ def build_fallback_graph(
     output_dir: Path | None = None,
     on_event: GraphLogCallback | None = None,
     llm_config: LLMConfig | None = None,
+    checkpoint_store: CheckpointStore | None = None,
 ) -> Phase1Graph:
     return Phase1Graph(
         extractor=extractor,
         output_dir=output_dir,
         on_event=on_event,
         llm_config=llm_config,
+        checkpoint_store=checkpoint_store,
     )

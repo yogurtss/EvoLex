@@ -25,6 +25,8 @@ def test_chat_cli_passes_initial_llm_config(monkeypatch) -> None:
             "sk-test",
             "--llm-timeout",
             "45",
+            "--llm-concurrency",
+            "7",
         ],
     )
 
@@ -34,4 +36,5 @@ def test_chat_cli_passes_initial_llm_config(monkeypatch) -> None:
         model="custom-model",
         api_key="sk-test",
         timeout_seconds=45,
+        concurrency=7,
     )

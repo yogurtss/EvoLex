@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from evolex.agents.deepseek_client import LLMConfig
+from evolex.agents.deepseek_client import LLMConfig, chat_completion_kwargs
 
 ChatAction = Literal[
     "exit",
@@ -19,11 +19,17 @@ ChatAction = Literal[
     "show_entities",
     "show_relations",
     "show_quality",
+    "show_candidates",
+    "show_quarantine",
+    "show_policy",
+    "show_schema",
+    "show_audit",
     "show_llm_settings",
     "set_llm_base_url",
     "set_llm_model",
     "set_llm_api_key",
     "set_llm_timeout",
+    "set_llm_concurrency",
     "set_pipeline_system",
     "set_pipeline_phase1",
     "set_pipeline_phase2",
@@ -47,6 +53,11 @@ PATH_COMMANDS = {"path", "candidate path", "show path"}
 ENTITIES_COMMANDS = {"entities", "show entities", "list entities"}
 RELATIONS_COMMANDS = {"relations", "show relations", "list relations"}
 QUALITY_COMMANDS = {"quality", "show quality", "quality scores"}
+CANDIDATES_COMMANDS = {"candidates", "show candidates", "recent candidates"}
+QUARANTINE_COMMANDS = {"quarantine", "show quarantine", "recent quarantine"}
+POLICY_COMMANDS = {"policy", "show policy", "policy decisions"}
+SCHEMA_COMMANDS = {"schema", "show schema", "schema proposals"}
+AUDIT_COMMANDS = {"audit", "show audit", "run audit"}
 LLM_SETTINGS_COMMANDS = {"settings", "llm", "model", "llm settings", "model settings", "show llm", "show model"}
 PIPELINE_SYSTEM_COMMANDS = {"system", "phase3", "phase 3", "p3", "full", "use system", "use phase3"}
 PIPELINE_PHASE1_COMMANDS = {"phase1", "phase 1", "p1", "use phase1"}
@@ -60,6 +71,11 @@ COMMANDS = tuple(
         | ENTITIES_COMMANDS
         | RELATIONS_COMMANDS
         | QUALITY_COMMANDS
+        | CANDIDATES_COMMANDS
+        | QUARANTINE_COMMANDS
+        | POLICY_COMMANDS
+        | SCHEMA_COMMANDS
+        | AUDIT_COMMANDS
         | LLM_SETTINGS_COMMANDS
         | PIPELINE_SYSTEM_COMMANDS
         | PIPELINE_PHASE1_COMMANDS
@@ -128,6 +144,21 @@ def classify_intent(
 
     if normalized in QUALITY_COMMANDS:
         return ChatIntent("show_quality", source="command")
+
+    if normalized in CANDIDATES_COMMANDS:
+        return ChatIntent("show_candidates", source="command")
+
+    if normalized in QUARANTINE_COMMANDS:
+        return ChatIntent("show_quarantine", source="command")
+
+    if normalized in POLICY_COMMANDS:
+        return ChatIntent("show_policy", source="command")
+
+    if normalized in SCHEMA_COMMANDS:
+        return ChatIntent("show_schema", source="command")
+
+    if normalized in AUDIT_COMMANDS:
+        return ChatIntent("show_audit", source="command")
 
     llm_setting_intent = _classify_llm_setting_command(text)
     if llm_setting_intent is not None:
@@ -367,6 +398,10 @@ def _classify_llm_setting_command(text: str) -> ChatIntent | None:
             ("set llm timeout ", "set model timeout ", "set timeout ", "llm timeout "),
             "set_llm_timeout",
         ),
+        (
+            ("set llm concurrency ", "set concurrency ", "llm concurrency ", "api concurrency "),
+            "set_llm_concurrency",
+        ),
     )
     for prefixes, action in prefix_actions:
         for prefix in prefixes:
@@ -403,6 +438,11 @@ def _classify_slash_command(text: str) -> ChatIntent | None:
         "entities": "show_entities",
         "relations": "show_relations",
         "quality": "show_quality",
+        "candidates": "show_candidates",
+        "quarantine": "show_quarantine",
+        "policy": "show_policy",
+        "schema": "show_schema",
+        "audit": "show_audit",
         "settings": "show_llm_settings",
         "llm": "show_llm_settings",
         "model": "show_llm_settings",
@@ -449,6 +489,8 @@ def _classify_config_command(stripped: str) -> ChatIntent:
         "api-key": ("set_llm_api_key", False),
         "api_key": ("set_llm_api_key", False),
         "timeout": ("set_llm_timeout", True),
+        "concurrency": ("set_llm_concurrency", True),
+        "parallel": ("set_llm_concurrency", True),
     }
 
     if subcommand in mapping:
@@ -489,7 +531,7 @@ def _llm_intent_available(llm_config: LLMConfig | None = None) -> bool:
     if os.environ.get("EVOLEX_OFFLINE") == "1":
         return False
     config = llm_config or LLMConfig()
-    return bool(config.resolved_api_key())
+    return bool(config.effective_api_key())
 
 
 def _call_llm_intent_parser(text: str, llm_config: LLMConfig | None = None) -> dict:
@@ -499,7 +541,7 @@ def _call_llm_intent_parser(text: str, llm_config: LLMConfig | None = None) -> d
         raise RuntimeError("OpenAI SDK is required for LLM intent parsing.") from exc
 
     config = llm_config or LLMConfig()
-    api_key = config.resolved_api_key()
+    api_key = config.effective_api_key()
     if not api_key:
         raise RuntimeError("LLM API key is required for LLM intent parsing.")
 
@@ -509,16 +551,19 @@ def _call_llm_intent_parser(text: str, llm_config: LLMConfig | None = None) -> d
         timeout=config.timeout_seconds,
     )
     response = client.chat.completions.create(
-        model=config.model,
-        messages=[
+        **chat_completion_kwargs(
+            config,
+            [
             {
                 "role": "system",
                 "content": (
                     "You are an intent parser for a bilingual English/Chinese CLI. "
                     "Return only one JSON object, no Markdown. "
                     "Allowed actions: exit, help, show_last_result, show_candidate_path, "
-                    "show_entities, show_relations, show_quality, show_llm_settings, "
+                    "show_entities, show_relations, show_quality, show_candidates, "
+                    "show_quarantine, show_policy, show_schema, show_audit, show_llm_settings, "
                     "set_llm_base_url, set_llm_model, set_llm_api_key, set_llm_timeout, "
+                    "set_llm_concurrency, "
                     "set_pipeline_system, set_pipeline_phase1, set_pipeline_phase2, "
                     "process_file, process_text. "
                     "For LLM setting changes, put the new value in payload. "
@@ -528,10 +573,10 @@ def _call_llm_intent_parser(text: str, llm_config: LLMConfig | None = None) -> d
                 ),
             },
             {"role": "user", "content": text},
-        ],
-        stream=False,
-        reasoning_effort="low",
-        extra_body={"thinking": {"type": "disabled"}},
+            ],
+            reasoning_effort="low",
+            thinking_type="disabled",
+        )
     )
     content = response.choices[0].message.content or "{}"
     parsed = _parse_json_object(content)

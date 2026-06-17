@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from evolex.agents.deepseek_client import BaseExtractor, TypedExtractor
 from evolex.graph.state import GraphState
 
@@ -15,6 +17,8 @@ def make_extract_node(extractor: BaseExtractor):
     def extract_node(state: GraphState) -> dict:
         llm_call_count = state.get("llm_call_count", 0)
         result: dict = {}
+        segments = list(state.get("segments", []))
+        concurrency = _extract_concurrency(extractor)
 
         if isinstance(extractor, TypedExtractor):
             mentions: list[dict] = []
@@ -24,8 +28,11 @@ def make_extract_node(extractor: BaseExtractor):
             evidence_spans: list[dict] = []
             semantic_atoms: list[dict] = []
 
-            for segment in state.get("segments", []):
-                batch = extractor.extract_typed(segment["text"])
+            for segment, batch in _map_segments(
+                segments,
+                lambda segment: extractor.extract_typed(segment["text"]),
+                concurrency,
+            ):
                 for m in batch.get("mentions", []):
                     m.setdefault("segment_id", segment["segment_id"])
                     mentions.append(m)
@@ -55,8 +62,11 @@ def make_extract_node(extractor: BaseExtractor):
         else:
             # Legacy path – plain semantic atoms
             semantic_atoms: list[dict] = []
-            for segment in state.get("segments", []):
-                atoms = extractor.extract(segment["text"])
+            for segment, atoms in _map_segments(
+                segments,
+                lambda segment: extractor.extract(segment["text"]),
+                concurrency,
+            ):
                 for atom in atoms:
                     atom.setdefault("segment_id", segment["segment_id"])
                     atom.setdefault("kg_language", "en")
@@ -69,6 +79,26 @@ def make_extract_node(extractor: BaseExtractor):
         return result
 
     return extract_node
+
+
+def _extract_concurrency(extractor: BaseExtractor) -> int:
+    if not extractor.uses_llm:
+        return 1
+    config = getattr(extractor, "config", None)
+    value = getattr(config, "concurrency", getattr(extractor, "concurrency", 1))
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _map_segments(segments: list[dict], func, concurrency: int):
+    if concurrency <= 1 or len(segments) <= 1:
+        return [(segment, func(segment)) for segment in segments]
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        values = list(executor.map(func, segments))
+    return list(zip(segments, values, strict=False))
 
 
 def _typed_batch_to_atoms(batch: dict, segment_id: str) -> list[dict]:

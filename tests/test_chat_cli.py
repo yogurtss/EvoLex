@@ -208,15 +208,20 @@ def test_chat_controller_llm_settings_commands(tmp_path: Path, monkeypatch) -> N
     response = controller.handle("set llm timeout 45")
     assert "45s" in response.text
 
+    response = controller.handle("set llm concurrency 6")
+    assert "6" in response.text
+
     assert controller.llm_config == LLMConfig(
         base_url="https://example.test/v1",
         model="custom-model",
         api_key="sk-test",
         timeout_seconds=45,
+        concurrency=6,
     )
 
     response = controller.handle("llm settings")
     assert "custom-model" in response.text
+    assert "concurrency: 6" in response.text
     assert "sk-test" not in response.text
 
 
@@ -231,6 +236,12 @@ def test_repl_completion_suggests_commands_and_paths(tmp_path: Path) -> None:
 
     llm_candidates = _completion_candidates("ll", tmp_path)
     assert "llm settings " in llm_candidates
+
+    policy_candidates = _completion_candidates("po", tmp_path)
+    assert "policy " in policy_candidates
+
+    slash_candidates = _completion_candidates("/qu", tmp_path)
+    assert "/quarantine " in slash_candidates
 
     path_candidates = _completion_candidates("docs/n", tmp_path)
     assert "docs/note.txt " in path_candidates
@@ -392,6 +403,18 @@ def test_controller_config_timeout(tmp_path: Path, monkeypatch) -> None:
     assert controller.llm_config.timeout_seconds == 60
 
 
+def test_controller_config_concurrency(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("evolex.config.CONFIG_PATH", tmp_path / ".evolex.toml")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("EVOLEX_OFFLINE", "1")
+    controller = ChatController(output_dir=tmp_path)
+    _force_plain_text(controller)
+
+    response = controller.handle("/config concurrency 3")
+    assert "3" in response.text
+    assert controller.llm_config.concurrency == 3
+
+
 def test_controller_config_show(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setenv("EVOLEX_OFFLINE", "1")
@@ -410,6 +433,19 @@ def test_controller_config_show_explicit(tmp_path: Path, monkeypatch) -> None:
 
     response = controller.handle("/config show")
     assert "LLM settings" in response.text
+
+
+def test_controller_registry_query_commands(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("EVOLEX_OFFLINE", "1")
+    controller = ChatController(output_dir=tmp_path, pipeline="phase3")
+    _force_plain_text(controller)
+
+    controller.handle("API Gateway retries HTTP 503 responses for 2 seconds.")
+
+    assert "Recent candidates" in controller.handle("/candidates").text
+    assert "Recent policy decisions" in controller.handle("/policy").text
+    assert "Recent audit events" in controller.handle("/audit").text
 
 
 def test_controller_slash_entities(tmp_path: Path, monkeypatch) -> None:

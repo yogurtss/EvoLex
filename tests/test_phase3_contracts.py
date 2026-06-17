@@ -2,8 +2,55 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from evolex.agents.deepseek_client import HeuristicTypedExtractor
+from evolex.agents.deepseek_client import HeuristicTypedExtractor, TypedExtractor
 from evolex.graph.runner import run_phase2_text
+
+
+class QuarantineTypedExtractor(TypedExtractor):
+    uses_llm = False
+    supports_relation_extraction = False
+
+    def extract_typed(self, segment_text: str) -> dict[str, list[dict]]:
+        return {
+            "mentions": [
+                {
+                    "text": "API Gateway",
+                    "normalized_text": "api gateway",
+                    "mention_type": "entity",
+                    "evidence": segment_text,
+                    "confidence": 0.8,
+                }
+            ],
+            "measurements": [],
+            "conditions": [{"text": "under stress", "confidence": 0.8}],
+            "claims": [
+                {
+                    "claim_id": "clm-0001",
+                    "subject": "API Gateway",
+                    "predicate": "has_property",
+                    "object": "unstable",
+                    "conditions": [{"text": "under stress"}],
+                    "evidence_ids": ["ev-0001"],
+                    "measurements": [],
+                    "confidence": 0.6,
+                    "document_id": "",
+                    "document_version": 0,
+                    "schema_version": "",
+                    "run_id": "",
+                }
+            ],
+            "evidence_spans": [
+                {
+                    "evidence_id": "ev-0001",
+                    "document_id": "",
+                    "segment_id": "",
+                    "text": segment_text,
+                    "span_start": 0,
+                    "span_end": len(segment_text),
+                    "run_id": "",
+                }
+            ],
+        }
 
 
 # =========================================================================
@@ -464,16 +511,21 @@ def test_quarantine_records_have_reason(tmp_path: Path) -> None:
     """Quarantine records include reason and evidence fields."""
     from evolex.repositories.candidates import CandidateRegistry
 
-    result = run_phase2_text(
-        "a b",  # Very short, low quality
+    from evolex.graph.runner import run_phase3_text
+
+    result = run_phase3_text(
+        "API Gateway is unstable under stress.",
         output_dir=tmp_path,
-        extractor=HeuristicTypedExtractor(),
+        extractor=QuarantineTypedExtractor(),
     )
 
     registry = CandidateRegistry(tmp_path / "registry")
     quarantine = registry.get_recent_quarantine(limit=10)
-    # May or may not have quarantine records depending on pipeline
-    assert isinstance(quarantine, list)
+    assert result.status == "quarantined"
+    assert result.publish_output_path == ""
+    assert len(quarantine) >= 1
+    assert quarantine[0]["reason"]
+    assert quarantine[0]["suggested_action"]
 
 
 def test_registry_query_without_file_hunting(tmp_path: Path) -> None:
