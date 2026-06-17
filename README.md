@@ -3,6 +3,9 @@
 EvoLex is a conversational CLI and controlled document-processing harness for
 technical document knowledge extraction.
 
+For a detailed architecture and implementation overview, see
+[docs/technical_design.md](docs/technical_design.md).
+
 By default EvoLex runs as one complete system: extract, validate, resolve
 entities, review quality, apply policy, and publish structured knowledge.
 The historical `phase1` / `phase2` / `phase3` names are still kept internally
