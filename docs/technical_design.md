@@ -94,6 +94,36 @@ START
 
 当安装了 `langgraph` 时，系统使用 `StateGraph` 构建图；否则使用本地 deterministic runner。两条路径保持同样的节点语义，以保证测试和本地 smoke run 稳定。
 
+### 3.2.1 信息增益驱动的 Agentic 模式
+
+除默认 `system` workflow 外，EvoLex 还支持 `agent` / `agentic` 运行模式。该模式不删除既有节点，而是把节点封装为工具，由多 Agent 控制层根据状态不确定性、期望信息增益、成本和风险动态选择下一步动作。
+
+Agentic 控制循环：
+
+```text
+observe GraphState
+  -> compute uncertainty / information gain / graph quality / risk
+  -> collect proposals from specialized agents
+  -> choose action by Utility = EIG - lambda * cost - mu * risk
+  -> call selected node tool
+  -> update GraphState and agent_trace
+  -> stop at publish/candidate/quarantine or budget limit
+```
+
+当前 v1 Agent 分工：
+
+| Agent | 职责 |
+|---|---|
+| `OrchestratorAgent` | 执行不可跳过的准备动作，并在低收益或预算耗尽时停止 |
+| `ExtractionAgent` | 发起 typed extraction / candidate KG 抽取 |
+| `EntityResolutionAgent` | 在 mentions 或 atoms 可用时触发实体解析 |
+| `EvidenceAgent` | 根据 evidence coverage 触发校验或重抽取 |
+| `GraphCriticAgent` | 根据图稀疏度、关系不确定性和一致性触发关系抽取与质量复核 |
+| `SchemaAgent` | 触发 schema gap 检测和 schema proposal |
+| `PolicyAgent` | 触发 critic、policy、publish 和 registry finalize |
+
+现有 workflow 仍作为 deterministic fallback 和基线；Agentic 模式通过 `evolex chat --pipeline agent` 或 Python `run_pipeline_text(..., pipeline="agent")` 启用。
+
 ### 3.3 节点职责
 
 | 节点 | 说明 |
@@ -131,6 +161,7 @@ START
 | Typed objects | `mentions`, `measurements`, `conditions`, `claim_candidates`, `evidence_spans` |
 | 决策对象 | `entity_decisions`, `policy_decisions`, `critic_results`, `schema_proposals` |
 | 治理/评估 | `unresolved_terms`, `audit_events`, `registry_output_path`, `checkpoint_path`, `shadow_report_path` |
+| Agentic 控制 | `agent_trace`, `uncertainty_scores`, `information_gain_scores`, `graph_quality_metrics`, `publish_confidence`, `agent_budget`, `active_questions` |
 | 运行计数 | `llm_call_count`, `tool_call_count`, `retry_count`, `warnings`, `status` |
 
 ### 4.2 Typed Objects
@@ -164,6 +195,16 @@ Policy 输出：
 | `candidate` | 中等风险或部分证据，保留为候选 |
 | `quarantine` | 高风险或 critic 拒绝，隔离 |
 | `reject` | 确定性失败，丢弃或终止发布 |
+
+### 4.4 Agentic 数学信号
+
+Agentic 模式使用轻量可解释数学信号，而不是黑盒训练模型：
+
+- 二元熵：`H(x) = -p log2(p) - (1-p) log2(1-p)`，用于衡量 entity / relation / claim / schema 置信度不确定性。
+- 期望信息增益：`EIG(a) = H(State_t) - E[H(State_{t+1} | a)]`，用于比较重抽取、关系抽取、质量复核等动作的收益。
+- 动作效用：`Utility(a) = EIG(a) - lambda * cost(a) - mu * risk(a)`，用于 Orchestrator 选择下一步工具。
+- 图质量指标：`graph_density`, `relation_consistency`, `evidence_coverage`, `relation_evidence_coverage`, `conflict_score`, `schema_fit_score`。
+- 发布置信度：由 evidence coverage、relation evidence coverage、relation consistency、schema fit 和 quality score 融合得到；低收益或预算耗尽时进入 candidate / quarantine，而不是强行 publish。
 
 ## 5. LLM 与并发设计
 
@@ -362,6 +403,7 @@ Replay 读取 checkpoint 生成节点执行序列。Resume 从最新 checkpoint 
 
 ```bash
 evolex chat
+evolex chat --pipeline agent
 ```
 
 可输入：
@@ -398,6 +440,20 @@ evolex chat
 
 离线模式使用 deterministic heuristic extractor，适合测试、演示和无网络环境。
 
+### Agentic 模式
+
+```bash
+evolex chat --pipeline agent
+```
+
+Agentic 模式会在结果 state 中记录：
+
+- `agent_trace`：每轮 Agent proposal、selected action、utility 和原因。
+- `uncertainty_scores`：entity / relation / claim / schema / evidence 不确定性。
+- `information_gain_scores`：候选动作的 EIG、risk、cost 和 utility。
+- `graph_quality_metrics`：图密度、证据覆盖、冲突率和 schema fit。
+- `active_questions`：Agent 认为仍需补证据或补关系的问题。
+
 ## 10. 测试策略
 
 测试覆盖范围：
@@ -411,6 +467,7 @@ evolex chat
 - frozen/shadow/checkpoint/replay/resume
 - segment-level extraction concurrency
 - schema promotion gate
+- information-gain agentic control
 
 运行：
 
@@ -421,7 +478,7 @@ pytest
 当前已验证全量测试通过：
 
 ```text
-128 passed, 3 skipped
+134 passed, 3 skipped
 ```
 
 ## 11. 当前能力边界

@@ -47,6 +47,13 @@ class GraphState(TypedDict, total=False):
     unresolved_terms: list[dict]
     registry_output_path: str
     audit_events: list[dict]
+    agent_trace: list[dict]
+    uncertainty_scores: dict[str, float]
+    information_gain_scores: list[dict]
+    graph_quality_metrics: dict[str, float]
+    publish_confidence: float
+    agent_budget: dict
+    active_questions: list[dict]
     evaluation_mode: str
     baseline_run_id: str
     checkpoint_path: str

@@ -12,6 +12,7 @@ from evolex.graph.runner import (
     Phase1RunResult,
     Phase2RunResult,
     Phase3RunResult,
+    PipelineAlias,
     run_pipeline_file,
     run_pipeline_text,
 )
@@ -31,7 +32,7 @@ class ChatController:
         self,
         output_dir: Path | None = None,
         cwd: Path | None = None,
-        pipeline: Literal["phase1", "phase1+2", "phase3"] = "phase3",
+        pipeline: PipelineAlias = "phase3",
         llm_config: LLMConfig | None = None,
     ) -> None:
         self.output_dir = output_dir

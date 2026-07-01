@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
+from evolex.agentic.controller import AgenticKGRunner
 from evolex.agents.deepseek_client import BaseExtractor, HeuristicTypedExtractor, LLMConfig
 from evolex.graph.builder import GraphLogCallback, PipelineGraph, PipelineMode, build_graph
 from evolex.graph.state import GraphState
@@ -32,7 +33,16 @@ class Phase1RunResult:
     state: GraphState
 
 
-PipelineAlias = Literal["phase1", "phase1+2", "phase2", "phase3", "full", "system"]
+PipelineAlias = Literal[
+    "phase1",
+    "phase1+2",
+    "phase2",
+    "phase3",
+    "full",
+    "system",
+    "agent",
+    "agentic",
+]
 
 
 def run_phase1_text(
@@ -283,27 +293,37 @@ def run_pipeline_text(
     evaluation_mode: str | None = None,
     baseline_run_id: str | None = None,
 ) -> Phase1RunResult | Phase2RunResult | Phase3RunResult:
-    pipeline_mode = normalize_pipeline(pipeline)
+    agentic_mode = is_agentic_pipeline(pipeline)
+    pipeline_mode = "phase3" if agentic_mode else normalize_pipeline(pipeline)
     run_id = f"RUN-{uuid4().hex[:12]}"
     document_id = f"DOC-{uuid4().hex[:12]}"
     checkpoint_store = CheckpointStore(checkpoint_dir) if checkpoint_dir else None
-    graph = build_graph(
-        extractor=extractor,
-        output_dir=output_dir,
-        pipeline=pipeline_mode,
-        on_event=on_event,
-        llm_config=llm_config,
-        checkpoint_store=checkpoint_store,
-    )
+    if agentic_mode:
+        graph = AgenticKGRunner(
+            extractor=extractor,
+            output_dir=output_dir,
+            on_event=on_event,
+            llm_config=llm_config,
+            checkpoint_store=checkpoint_store,
+        )
+    else:
+        graph = build_graph(
+            extractor=extractor,
+            output_dir=output_dir,
+            pipeline=pipeline_mode,
+            on_event=on_event,
+            llm_config=llm_config,
+            checkpoint_store=checkpoint_store,
+        )
     initial_state: GraphState = {
         "run_id": run_id,
-        "thread_id": f"document:{document_id}:{_thread_version(pipeline_mode)}",
+        "thread_id": f"document:{document_id}:{'agent' if agentic_mode else _thread_version(pipeline_mode)}",
         "document_id": document_id,
         "document_version": document_version,
         "document_text": document_text,
         "schema_version": "semiconductor-0.1.0",
         "policy_version": "policy-0.1.0",
-        "graph_version": "graph-0.1.0",
+        "graph_version": "agentic-0.1.0" if agentic_mode else "graph-0.1.0",
         "prompt_versions": {},
         "model_routes": {},
         "llm_call_count": 0,
@@ -318,7 +338,7 @@ def run_pipeline_text(
     if checkpoint_store is not None:
         initial_state["checkpoint_path"] = str(checkpoint_store.db_path)
     state = graph.invoke(initial_state, on_node=on_node)
-    if pipeline_mode == "phase3":
+    if agentic_mode or pipeline_mode == "phase3":
         return _to_phase3_result(state)
     if pipeline_mode == "phase1+2":
         return _to_phase2_result(state)
@@ -534,6 +554,8 @@ def resume_thread(
 
 def normalize_pipeline(pipeline: PipelineAlias | str) -> PipelineMode:
     normalized = pipeline.lower().replace("_", "-").replace(" ", "")
+    if normalized in ("agent", "agentic", "multiagent", "multi-agent"):
+        return "phase3"
     if normalized in ("system", "phase3", "p3", "full"):
         return "phase3"
     if normalized in ("phase1", "p1"):
@@ -542,6 +564,11 @@ def normalize_pipeline(pipeline: PipelineAlias | str) -> PipelineMode:
         return "phase1+2"
     msg = "pipeline must be one of: system, phase3, full, phase2, phase1"
     raise ValueError(msg)
+
+
+def is_agentic_pipeline(pipeline: PipelineAlias | str) -> bool:
+    normalized = pipeline.lower().replace("_", "-").replace(" ", "")
+    return normalized in ("agent", "agentic", "multiagent", "multi-agent")
 
 
 def _thread_version(pipeline: PipelineMode) -> str:

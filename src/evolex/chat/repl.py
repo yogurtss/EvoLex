@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
-from typing import Literal
 
 from evolex.agents.deepseek_client import LLMConfig
 from evolex.chat.controller import ChatController
+from evolex.graph.runner import PipelineAlias
 
 COMPLETION_COMMANDS = (
     "help",
@@ -46,6 +46,8 @@ SLASH_COMMANDS = (
     "/settings",
     "/config",
     "/system",
+    "/agent",
+    "/agentic",
     "/phase3",
     "/phase2",
     "/phase1",
@@ -54,7 +56,7 @@ SLASH_COMMANDS = (
 
 def run_repl(
     output_dir: Path | None = None,
-    pipeline: Literal["phase1", "phase1+2", "phase3"] = "phase3",
+    pipeline: PipelineAlias = "phase3",
     llm_config: LLMConfig | None = None,
 ) -> None:
     controller = ChatController(
@@ -361,6 +363,23 @@ class _ProgressState:
 
 
 def _pipeline_stages(pipeline: str) -> list[str]:
+    if pipeline in ("agent", "agentic"):
+        return [
+            "ingest",
+            "profile",
+            "segment",
+            "extract",
+            "validate",
+            "candidate_store",
+            "entity_resolve",
+            "relation_extract",
+            "quality_review",
+            "schema_gap",
+            "schema_proposer",
+            "critic",
+            "policy",
+            "publish/registry_finalize",
+        ]
     base = ["ingest", "profile", "segment", "extract", "validate", "candidate_store"]
     if pipeline == "phase1":
         return base

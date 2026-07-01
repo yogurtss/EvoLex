@@ -30,7 +30,7 @@ app.add_typer(schema_app, name="schema")
 def _complete_pipeline(incomplete: str) -> list[str]:
     return [
         mode
-        for mode in ("system", "full", "phase3", "phase2", "phase1")
+        for mode in ("system", "agent", "agentic", "full", "phase3", "phase2", "phase1")
         if mode.startswith(incomplete)
     ]
 
@@ -45,7 +45,7 @@ def chat(
     pipeline: str = typer.Option(
         "system",
         "--pipeline",
-        help="Pipeline mode. Default is the complete system; use phase2/phase1 only for debug compatibility.",
+        help="Pipeline mode. Default is the complete system; use agent for information-gain multi-agent control.",
         autocompletion=_complete_pipeline,
     ),
     llm_base_url: Optional[str] = typer.Option(
