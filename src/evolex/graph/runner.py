@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
 from evolex.agentic.controller import AgenticKGRunner
-from evolex.agents.deepseek_client import BaseExtractor, HeuristicTypedExtractor, LLMConfig
+from evolex.agents.deepseek_client import (
+    BaseExtractor,
+    HeuristicExtractor,
+    HeuristicTypedExtractor,
+    LLMConfig,
+)
 from evolex.graph.builder import GraphLogCallback, PipelineGraph, PipelineMode, build_graph
 from evolex.graph.state import GraphState
 from evolex.repositories.candidates import CandidateRegistry
@@ -296,7 +302,8 @@ def run_pipeline_text(
     agentic_mode = is_agentic_pipeline(pipeline)
     pipeline_mode = "phase3" if agentic_mode else normalize_pipeline(pipeline)
     run_id = f"RUN-{uuid4().hex[:12]}"
-    document_id = f"DOC-{uuid4().hex[:12]}"
+    document_digest = sha256(document_text.strip().encode("utf-8")).hexdigest()[:12]
+    document_id = f"DOC-{document_digest}"
     checkpoint_store = CheckpointStore(checkpoint_dir) if checkpoint_dir else None
     if agentic_mode:
         graph = AgenticKGRunner(
@@ -315,17 +322,36 @@ def run_pipeline_text(
             llm_config=llm_config,
             checkpoint_store=checkpoint_store,
         )
+    active_schema = (
+        SchemaCandidateStore(
+            (output_dir / "schema_candidates") if output_dir else None
+        ).get_active_schema()
+        if pipeline_mode == "phase3"
+        else {
+            "version_id": "semiconductor-0.1.0",
+            "types": [],
+            "predicates": [],
+            "attributes": [],
+        }
+    )
     initial_state: GraphState = {
         "run_id": run_id,
-        "thread_id": f"document:{document_id}:{'agent' if agentic_mode else _thread_version(pipeline_mode)}",
+        "thread_id": (
+            f"document:{document_id}:v{document_version}:"
+            f"{'agent' if agentic_mode else _thread_version(pipeline_mode)}"
+        ),
         "document_id": document_id,
         "document_version": document_version,
+        "pipeline_mode": "agent" if agentic_mode else pipeline_mode,
         "document_text": document_text,
-        "schema_version": "semiconductor-0.1.0",
+        "schema_version": str(active_schema["version_id"]),
+        "active_schema": active_schema,
         "policy_version": "policy-0.1.0",
         "graph_version": "agentic-0.1.0" if agentic_mode else "graph-0.1.0",
         "prompt_versions": {},
-        "model_routes": {},
+        "model_routes": _extractor_route(
+            getattr(graph, "extractor", extractor)
+        ),
         "llm_call_count": 0,
         "tool_call_count": 0,
         "retry_count": 0,
@@ -519,23 +545,70 @@ def resume_thread(
     output_dir: Path | None = None,
     checkpoint_dir: Path | None = None,
     extractor: BaseExtractor | None = None,
-    pipeline: PipelineAlias = "system",
+    pipeline: PipelineAlias | None = None,
     on_node: Callable[[str], None] | None = None,
     llm_config: LLMConfig | None = None,
 ) -> ResumeResult:
-    pipeline_mode = normalize_pipeline(pipeline)
     store = CheckpointStore(checkpoint_dir)
     checkpoint = store.latest_for_thread(thread_id)
     if checkpoint is None:
         raise ValueError(f"no checkpoint found for thread_id: {thread_id}")
-    graph = PipelineGraph(
-        extractor=extractor or HeuristicTypedExtractor(),
-        output_dir=output_dir,
-        pipeline=pipeline_mode,
-        llm_config=llm_config,
-        checkpoint_store=store,
+    checkpoint_state = checkpoint["state"]
+    stored_pipeline = str(
+        checkpoint_state.get("pipeline_mode")
+        or _pipeline_from_thread_id(thread_id)
     )
-    state = graph.resume_from_checkpoint(checkpoint, on_node=on_node)
+    if pipeline is not None:
+        requested_pipeline = (
+            "agent" if is_agentic_pipeline(pipeline) else normalize_pipeline(pipeline)
+        )
+        if requested_pipeline != stored_pipeline:
+            raise ValueError(
+                "resume pipeline does not match checkpoint: "
+                f"requested={requested_pipeline}, stored={stored_pipeline}"
+            )
+    selected_pipeline = stored_pipeline
+    agentic_mode = selected_pipeline == "agent"
+    pipeline_mode = (
+        "phase3" if agentic_mode else normalize_pipeline(selected_pipeline)
+    )
+    if _checkpoint_is_complete(checkpoint, selected_pipeline):
+        state = checkpoint["state"]
+        if pipeline_mode == "phase3":
+            result = _to_phase3_result(state)
+        elif pipeline_mode == "phase1+2":
+            result = _to_phase2_result(state)
+        else:
+            result = _to_result(state)
+        return ResumeResult(
+            thread_id=thread_id,
+            resumed_from_node=checkpoint["node_name"],
+            result=result,
+        )
+
+    extractor, llm_config = _resume_runtime(
+        checkpoint_state,
+        extractor=extractor,
+        llm_config=llm_config,
+    )
+    if agentic_mode:
+        graph = AgenticKGRunner(
+            extractor=extractor,
+            output_dir=output_dir,
+            llm_config=llm_config,
+            checkpoint_store=store,
+        )
+        graph._step_index = int(checkpoint.get("step_index", 0))
+        state = graph.invoke(checkpoint["state"], on_node=on_node)
+    else:
+        graph = PipelineGraph(
+            extractor=extractor,
+            output_dir=output_dir,
+            pipeline=pipeline_mode,
+            llm_config=llm_config,
+            checkpoint_store=store,
+        )
+        state = graph.resume_from_checkpoint(checkpoint, on_node=on_node)
     if pipeline_mode == "phase3":
         result = _to_phase3_result(state)
     elif pipeline_mode == "phase1+2":
@@ -562,7 +635,10 @@ def normalize_pipeline(pipeline: PipelineAlias | str) -> PipelineMode:
         return "phase1"
     if normalized in ("phase1+2", "phase2", "p2"):
         return "phase1+2"
-    msg = "pipeline must be one of: system, phase3, full, phase2, phase1"
+    msg = (
+        "pipeline must be one of: agent, agentic, system, phase3, "
+        "full, phase2, phase1"
+    )
     raise ValueError(msg)
 
 
@@ -575,6 +651,91 @@ def _thread_version(pipeline: PipelineMode) -> str:
     if pipeline == "phase3":
         return "v3"
     return "v2" if pipeline == "phase1+2" else "v1"
+
+
+def _pipeline_from_thread_id(thread_id: str) -> str:
+    suffix = thread_id.rsplit(":", 1)[-1].lower()
+    inferred = {
+        "agent": "agent",
+        "v3": "phase3",
+        "v2": "phase1+2",
+        "v1": "phase1",
+    }.get(suffix)
+    if inferred is None:
+        raise ValueError(
+            "checkpoint does not record pipeline_mode and the thread_id suffix "
+            f"cannot be interpreted: {thread_id}"
+        )
+    return inferred
+
+
+def _extractor_route(extractor: BaseExtractor | None) -> dict[str, str]:
+    if extractor is None:
+        return {}
+    route = {
+        "extractor_class": type(extractor).__name__,
+        "uses_llm": str(bool(getattr(extractor, "uses_llm", False))).lower(),
+        "supports_joint_extraction": str(
+            bool(getattr(extractor, "supports_joint_extraction", False))
+        ).lower(),
+    }
+    config = getattr(extractor, "config", None)
+    if isinstance(config, LLMConfig):
+        route.update(
+            {
+                "base_url": config.base_url,
+                "model": config.model,
+                "timeout_seconds": str(config.timeout_seconds),
+                "concurrency": str(config.concurrency),
+                "profile": config.inferred_profile(),
+            }
+        )
+    return route
+
+
+def _resume_runtime(
+    state: GraphState,
+    *,
+    extractor: BaseExtractor | None,
+    llm_config: LLMConfig | None,
+) -> tuple[BaseExtractor | None, LLMConfig | None]:
+    route = dict(state.get("model_routes", {}))
+    extractor_class = str(route.get("extractor_class", ""))
+    if extractor is not None:
+        if extractor_class and type(extractor).__name__ != extractor_class:
+            raise ValueError(
+                "resume extractor does not match checkpoint: "
+                f"requested={type(extractor).__name__}, stored={extractor_class}"
+            )
+        return extractor, llm_config
+    if extractor_class == "HeuristicTypedExtractor":
+        return HeuristicTypedExtractor(), llm_config
+    if extractor_class == "HeuristicExtractor":
+        return HeuristicExtractor(), llm_config
+    if extractor_class in {"DeepSeekExtractor", "OpenAICompatibleExtractor"}:
+        if llm_config is None:
+            llm_config = LLMConfig(
+                base_url=str(route.get("base_url") or LLMConfig().base_url),
+                model=str(route.get("model") or LLMConfig().model),
+                timeout_seconds=int(route.get("timeout_seconds") or 30),
+                concurrency=int(route.get("concurrency") or 4),
+                profile=str(route.get("profile") or "") or None,
+            )
+        return None, llm_config
+    raise ValueError(
+        "checkpoint extractor cannot be reconstructed safely; pass an "
+        f"extractor instance of class {extractor_class or '<unknown>'}"
+    )
+
+
+def _checkpoint_is_complete(checkpoint: dict, pipeline: str) -> bool:
+    expected_last_node = {
+        "agent": "registry_finalize",
+        "phase3": "registry_finalize",
+        "phase1+2": "publish",
+        "phase1": "candidate_store",
+    }.get(pipeline)
+    return bool(expected_last_node) and checkpoint.get("node_name") == expected_last_node
 
 
 def _to_result(state: GraphState) -> Phase1RunResult:

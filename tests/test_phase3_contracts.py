@@ -187,7 +187,6 @@ def test_resolver_distinguishes_same_name_different_context(tmp_path: Path) -> N
     decisions = result.state.get("entity_decisions", [])
     # Count CREATE_CANDIDATE decisions (fully-linked mentions)
     creates = [d for d in decisions if d.get("decision") == "CREATE_CANDIDATE"]
-    links = [d for d in decisions if d.get("decision") == "LINK"]
     # At least the first mention should be CREATE_CANDIDATE
     assert len(creates) >= 1, \
         f"Expected at least 1 CREATE_CANDIDATE, got {len(creates)}"
@@ -244,7 +243,6 @@ def test_resolver_ambiguous_not_published(tmp_path: Path) -> None:
         extractor=HeuristicTypedExtractor(),
     )
     decisions = result.state.get("entity_decisions", [])
-    ambig = [d for d in decisions if d.get("decision") == "AMBIGUOUS"]
     # Might or might not have ambiguous - but REJECT should not appear
     rejects = [d for d in decisions if d.get("decision") == "REJECT"]
     assert len(rejects) == 0, "No rejects expected for this input"
@@ -475,7 +473,7 @@ def test_candidate_registry_stores_candidates(tmp_path: Path) -> None:
     """CandidateRegistry stores typed objects for querying."""
     from evolex.repositories.candidates import CandidateRegistry
 
-    result = run_phase2_text(
+    run_phase2_text(
         "ICP etching at 20mTorr achieves 2.5µm/min.",
         output_dir=tmp_path,
         extractor=HeuristicTypedExtractor(),

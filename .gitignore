@@ -12,3 +12,9 @@ data/kg/
 .env
 api_key.txt
 api.txt
+
+# Reproducible runtime products are regenerated from the tracked sources.
+outputs/demo/
+outputs/**/*.sqlite
+outputs/**/*.db
+outputs/**/*.jsonl

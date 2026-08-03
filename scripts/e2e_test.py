@@ -93,7 +93,7 @@ def main():
         print(f"\nLLM Calls: {state['llm_call_count']}")
 
     # Version fields
-    print(f"\nVersion Info:")
+    print("\nVersion Info:")
     print(f"  document_version: {state.get('document_version')}")
     print(f"  schema_version:   {state.get('schema_version')}")
     print(f"  policy_version:   {state.get('policy_version')}")

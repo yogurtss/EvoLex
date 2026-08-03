@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from evolex.agents.deepseek_client import DeepSeekExtractor, HeuristicExtractor
+from evolex.agents.deepseek_client import DeepSeekExtractor
 
 pytestmark = [
     pytest.mark.skipif(
@@ -62,12 +62,12 @@ def test_phase3_deepseek_smoke(tmp_path: Path) -> None:
 
     # Check version fields
     assert state.get("document_version") == 2
-    assert state.get("schema_version") == "semiconductor-0.1.0"
+    assert state.get("schema_version") == "evolex-base-0.1.0"
     assert state.get("policy_version") == "policy-0.1.0"
 
     # Print summary for inspection
     print(f"\n{'='*60}")
-    print(f"Phase 3 E2E Test Results")
+    print("Phase 3 E2E Test Results")
     print(f"{'='*60}")
     print(f"Status:        {result.status}")
     print(f"Claims:        {result.claim_count}")

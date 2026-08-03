@@ -85,6 +85,7 @@ def chat_completion_kwargs(
 class BaseExtractor(ABC):
     uses_llm = False
     supports_relation_extraction = False
+    supports_joint_extraction = False
 
     @abstractmethod
     def extract(self, segment_text: str) -> list[dict]:
@@ -95,7 +96,7 @@ class BaseExtractor(ABC):
 
 
 class TypedExtractor(BaseExtractor):
-    """Extractor that produces typed objects (claims, evidence, mentions …).
+    """Extractor that produces evidence-scoped graph objects in one pass.
 
     Subclasses implement *either* the legacy ``extract()`` method
     *or* the new ``extract_typed()`` method.
@@ -122,7 +123,13 @@ class TypedExtractor(BaseExtractor):
         return atoms
 
     def extract_typed(self, segment_text: str) -> dict[str, list[dict]]:
-        """Return a batch dict with keys: mentions, measurements, conditions, claims, evidence_spans."""
+        """Return mentions, relation candidates, claims, and evidence spans.
+
+        Joint extractors give every mention a segment-local ``mention_id`` and
+        make relation endpoints refer to those IDs.  The graph layer namespaces
+        the IDs and resolves them to canonical entity IDs later, so a relation
+        never depends on a second model call reconstructing lost context.
+        """
         raise NotImplementedError
 
 
@@ -173,129 +180,49 @@ class HeuristicTypedExtractor(TypedExtractor):
 
     uses_llm = False
     supports_relation_extraction = False
+    supports_joint_extraction = True
 
     def extract_typed(self, segment_text: str) -> dict[str, list[dict]]:
-        lowered = segment_text.lower()
-        claims: list[dict] = []
-        measurements: list[dict] = []
-        mentions: list[dict] = []
-        evidence_spans: list[dict] = []
-
-        # Minimal measurement detection (numbers with units)
-        for match in re.finditer(r"\b(\d+(?:\.\d+)?)\s?(ms|s|%|mTorr|°C|K|V|A|µm/min)\b", segment_text, flags=re.IGNORECASE):
-            val_str, unit = match.groups()
-            measurements.append({
-                "parameter": _infer_parameter(unit),
-                "value": float(val_str),
-                "unit": unit,
-                "text": match.group(0),
-                "segment_id": "",
-                "evidence": segment_text,
-                "confidence": 0.7,
-            })
-
-        # Acronyms as mentions
-        for match in re.finditer(r"\b[A-Z][A-Za-z0-9_-]{2,}\b", segment_text):
-            txt = match.group(0)
-            mentions.append({
-                "text": txt,
-                "normalized_text": txt.lower(),
-                "mention_type": "entity",
-                "segment_id": "",
-                "evidence": segment_text,
-                "confidence": 0.72,
-            })
-
-        # Generate one claim if there are mentions
-        if mentions and measurements:
-            claims.append({
-                "claim_id": "",
-                "subject": mentions[0]["text"],
-                "predicate": "has_measurement",
-                "object": measurements[0]["parameter"],
-                "conditions": [],
-                "evidence_ids": [],
-                "measurements": [measurements[0]],
-                "confidence": 0.6,
-                "document_id": "",
-                "document_version": 0,
-                "schema_version": "",
-                "run_id": "",
-            })
-            # Link claim to evidence
-            evidence_spans.append({
-                "evidence_id": f"ev-{len(evidence_spans)+1:04d}",
-                "document_id": "",
-                "segment_id": "",
-                "text": segment_text[:200],
-                "span_start": 0,
-                "span_end": min(len(segment_text), 200),
-                "run_id": "",
-            })
-            # Wire evidence_ids
-            claims[-1]["evidence_ids"] = [evidence_spans[-1]["evidence_id"]]
-
-        # Fallback: if we have measurements but no claims, create one
-        if not claims and measurements:
-            claims.append({
-                "claim_id": "",
-                "subject": "system",
-                "predicate": "has_measurement",
-                "object": measurements[0]["parameter"],
-                "conditions": [],
-                "evidence_ids": [],
-                "measurements": [measurements[0]],
-                "confidence": 0.55,
-                "document_id": "",
-                "document_version": 0,
-                "schema_version": "",
-                "run_id": "",
-            })
-            evidence_spans.append({
-                "evidence_id": "ev-0001",
-                "document_id": "",
-                "segment_id": "",
-                "text": segment_text[:200],
-                "span_start": 0,
-                "span_end": min(len(segment_text), 200),
-                "run_id": "",
-            })
-            claims[-1]["evidence_ids"] = ["ev-0001"]
-
-        # Truly empty – produce one fallback claim
-        if not claims:
-            claims.append({
-                "claim_id": "",
-                "subject": "system",
-                "predicate": "related_to",
-                "object": "unclassified concept",
-                "conditions": [],
-                "evidence_ids": [],
-                "measurements": [],
-                "confidence": 0.55,
-                "document_id": "",
-                "document_version": 0,
-                "schema_version": "",
-                "run_id": "",
-            })
-            evidence_spans.append({
-                "evidence_id": "ev-0001",
-                "document_id": "",
-                "segment_id": "",
-                "text": segment_text[:200],
-                "span_start": 0,
-                "span_end": min(len(segment_text), 200),
-                "run_id": "",
-            })
-            claims[-1]["evidence_ids"] = ["ev-0001"]
-
-        return {
-            "mentions": mentions,
-            "measurements": measurements,
+        payload = {
+            "mentions": _heuristic_mentions(segment_text),
+            "relations": [],
+            "measurements": [],
             "conditions": [],
-            "claims": claims,
-            "evidence_spans": evidence_spans,
         }
+
+        for match in re.finditer(
+            r"\b(\d+(?:\.\d+)?)\s?(ms|s|%|mTorr|°C|K|V|A|µm/min)\b",
+            segment_text,
+            flags=re.IGNORECASE,
+        ):
+            value, unit = match.groups()
+            measurement_id = f"m{len(payload['mentions']) + 1}"
+            payload["mentions"].append(
+                {
+                    "mention_id": measurement_id,
+                    "text": match.group(0),
+                    "mention_type": "measurement",
+                    "confidence": 0.7,
+                    "_start": match.start(),
+                    "_end": match.end(),
+                }
+            )
+            payload["measurements"].append(
+                {
+                    "parameter": _infer_parameter(unit),
+                    "value": float(value),
+                    "unit": unit,
+                    "text": match.group(0),
+                    "evidence": segment_text,
+                    "confidence": 0.7,
+                }
+            )
+
+        payload["relations"] = _heuristic_relations(
+            segment_text,
+            payload["mentions"],
+        )
+        return _normalize_joint_batch(payload, segment_text)
 
 
 def _infer_parameter(unit: str) -> str:
@@ -320,6 +247,7 @@ def _infer_parameter(unit: str) -> str:
 class OpenAICompatibleExtractor(TypedExtractor):
     uses_llm = True
     supports_relation_extraction = True
+    supports_joint_extraction = True
 
     def __init__(
         self,
@@ -393,13 +321,58 @@ class OpenAICompatibleExtractor(TypedExtractor):
         return normalized_atoms
 
     def extract_typed(self, segment_text: str) -> dict[str, list[dict]]:
-        """Convert the legacy atom response into typed Phase 3 objects.
+        """Jointly extract entities and their relations from one source span."""
+        self._emit("llm", f"Joint graph extraction request started. chars={len(segment_text)}")
+        try:
+            response = self.client.chat.completions.create(
+                **chat_completion_kwargs(
+                    self._active_config(),
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You jointly extract a technical knowledge graph from one "
+                                "source segment. Return only one JSON object with arrays "
+                                "mentions, relations, measurements, and conditions. Each "
+                                "mention must contain mention_id, text, mention_type, and "
+                                "confidence. Each relation must contain subject_mention_id, "
+                                "predicate, object_mention_id, evidence, and confidence. "
+                                "Relation endpoints must use mention_id values declared in "
+                                "the same response. Include literal values as mentions when "
+                                "they are relation endpoints. Use concise English canonical "
+                                "text and snake_case predicates, while evidence must be an "
+                                "exact source span. Do not output Markdown or infer facts "
+                                "that are not stated in the segment."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                "Jointly extract entity mentions and relations from this "
+                                f"technical segment:\n{segment_text}"
+                            ),
+                        },
+                    ],
+                    reasoning_effort="high",
+                    thinking_type="enabled",
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"LLM joint graph extraction failed: {_sanitize_error_message(str(exc))}"
+            ) from exc
 
-        This keeps the public "system" pipeline usable while the model prompt
-        still emits the older Phase 1 atom schema.
-        """
-        atoms = self.extract(segment_text)
-        return _atoms_to_typed_batch(atoms, segment_text)
+        content = response.choices[0].message.content or ""
+        self._emit("llm", f"Joint graph extraction model output: {_truncate_log(content)}")
+        payload = _parse_json_object(content)
+        batch = _normalize_joint_batch(payload, segment_text)
+        self._emit(
+            "llm",
+            "Joint graph extraction parsed "
+            f"{len(batch['mentions'])} mentions and "
+            f"{len(batch['relation_candidates'])} relations.",
+        )
+        return batch
 
     def extract_relations(self, atoms: list[dict], entities: list[dict]) -> list[dict]:
         self._emit(
@@ -659,11 +632,341 @@ def _atoms_to_typed_batch(atoms: list[dict[str, Any]], segment_text: str) -> dic
 
     return {
         "mentions": mentions,
+        "relation_candidates": [],
         "measurements": measurements,
         "conditions": conditions,
         "claims": claims,
         "evidence_spans": evidence_spans,
     }
+
+
+def _normalize_joint_batch(
+    payload: dict[str, Any],
+    segment_text: str,
+) -> dict[str, list[dict]]:
+    """Validate a joint model response and derive evidence-linked claims.
+
+    The response uses local mention IDs.  Invalid endpoint references are
+    excluded instead of being guessed, which makes the later mapping step
+    deterministic and auditable.
+    """
+    mentions: list[dict] = []
+    local_id_map: dict[str, str] = {}
+    mention_text_by_id: dict[str, str] = {}
+
+    raw_mentions = payload.get("mentions", [])
+    if not isinstance(raw_mentions, list):
+        raw_mentions = []
+    for index, raw in enumerate(raw_mentions, start=1):
+        if not isinstance(raw, dict):
+            continue
+        text = str(raw.get("text", "")).strip()[:200]
+        if not text:
+            continue
+        requested_id = str(raw.get("mention_id", f"m{index}")).strip() or f"m{index}"
+        mention_id = requested_id
+        suffix = 2
+        while mention_id in mention_text_by_id:
+            mention_id = f"{requested_id}_{suffix}"
+            suffix += 1
+        local_id_map.setdefault(requested_id, mention_id)
+        mention_text_by_id[mention_id] = text
+        mentions.append(
+            {
+                "mention_id": mention_id,
+                "text": text,
+                "normalized_text": text.casefold(),
+                "mention_type": _normalize_type(
+                    str(raw.get("mention_type", raw.get("type", "entity")))
+                ),
+                "segment_id": "",
+                "evidence": str(raw.get("evidence", segment_text))[:500],
+                "confidence": _safe_confidence(raw.get("confidence", 0.7)),
+            }
+        )
+
+    if not mentions:
+        mentions.append(
+            {
+                "mention_id": "m1",
+                "text": "system",
+                "normalized_text": "system",
+                "mention_type": "entity",
+                "segment_id": "",
+                "evidence": segment_text[:500],
+                "confidence": 0.5,
+            }
+        )
+        local_id_map["m1"] = "m1"
+        mention_text_by_id["m1"] = "system"
+
+    evidence_spans: list[dict] = []
+    relation_candidates: list[dict] = []
+    claims: list[dict] = []
+    raw_relations = payload.get("relations", payload.get("relation_candidates", []))
+    if not isinstance(raw_relations, list):
+        raw_relations = []
+
+    for index, raw in enumerate(raw_relations, start=1):
+        if not isinstance(raw, dict):
+            continue
+        raw_subject = str(
+            raw.get("subject_mention_id", raw.get("subject_ref", ""))
+        ).strip()
+        raw_object = str(
+            raw.get("object_mention_id", raw.get("object_ref", ""))
+        ).strip()
+        subject_id = local_id_map.get(raw_subject, raw_subject)
+        object_id = local_id_map.get(raw_object, raw_object)
+        predicate = _normalize_type(str(raw.get("predicate", "related_to")))
+        evidence = str(raw.get("evidence", segment_text)).strip() or segment_text
+        if evidence not in segment_text:
+            evidence = segment_text
+        span_start = segment_text.find(evidence)
+        if span_start < 0:
+            span_start = 0
+        evidence_id = f"ev-{len(evidence_spans) + 1:04d}"
+        evidence_spans.append(
+            {
+                "evidence_id": evidence_id,
+                "document_id": "",
+                "segment_id": "",
+                "text": evidence[:500],
+                "span_start": span_start,
+                "span_end": min(len(segment_text), span_start + len(evidence)),
+                "run_id": "",
+            }
+        )
+        confidence = _safe_confidence(raw.get("confidence", 0.5))
+        candidate_id = str(raw.get("relation_candidate_id", f"rc-{index:04d}"))
+        endpoints_valid = (
+            subject_id in mention_text_by_id
+            and object_id in mention_text_by_id
+        )
+        relation_candidates.append(
+            {
+                "relation_candidate_id": candidate_id,
+                "subject_mention_id": subject_id,
+                "predicate": predicate or "related_to",
+                "object_mention_id": object_id,
+                "evidence": evidence[:500],
+                "evidence_ids": [evidence_id],
+                "confidence": confidence,
+                "segment_id": "",
+                "extraction_mode": "joint",
+                "endpoint_validation_status": (
+                    "valid" if endpoints_valid else "invalid"
+                ),
+                "endpoint_validation_errors": [
+                    label
+                    for label, endpoint_id in (
+                        ("unknown_subject_mention_id", subject_id),
+                        ("unknown_object_mention_id", object_id),
+                    )
+                    if endpoint_id not in mention_text_by_id
+                ],
+            }
+        )
+        if not endpoints_valid:
+            continue
+        claims.append(
+            {
+                "claim_id": "",
+                "subject": mention_text_by_id[subject_id],
+                "predicate": predicate or "related_to",
+                "object": mention_text_by_id[object_id],
+                "conditions": [],
+                "evidence_ids": [evidence_id],
+                "measurements": [],
+                "confidence": confidence,
+                "document_id": "",
+                "document_version": 0,
+                "schema_version": "",
+                "run_id": "",
+            }
+        )
+
+    measurements: list[dict] = []
+    raw_measurements = payload.get("measurements", [])
+    if isinstance(raw_measurements, list):
+        for raw in raw_measurements:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                value = float(raw.get("value"))
+            except (TypeError, ValueError):
+                continue
+            measurements.append(
+                {
+                    "parameter": _normalize_type(str(raw.get("parameter", "measurement"))),
+                    "value": value,
+                    "unit": str(raw.get("unit", ""))[:40],
+                    "text": str(raw.get("text", ""))[:200],
+                    "segment_id": "",
+                    "evidence": str(raw.get("evidence", segment_text))[:500],
+                    "confidence": _safe_confidence(raw.get("confidence", 0.7)),
+                }
+            )
+
+    conditions = [
+        dict(item)
+        for item in payload.get("conditions", [])
+        if isinstance(item, dict)
+    ]
+
+    if not claims:
+        evidence_id = f"ev-{len(evidence_spans) + 1:04d}"
+        evidence_spans.append(
+            {
+                "evidence_id": evidence_id,
+                "document_id": "",
+                "segment_id": "",
+                "text": segment_text[:500],
+                "span_start": 0,
+                "span_end": min(len(segment_text), 500),
+                "run_id": "",
+            }
+        )
+        claims.append(
+            {
+                "claim_id": "",
+                "subject": mentions[0]["text"],
+                "predicate": "related_to",
+                "object": "unclassified concept",
+                "conditions": [],
+                "evidence_ids": [evidence_id],
+                "measurements": measurements[:1],
+                "confidence": 0.45,
+                "document_id": "",
+                "document_version": 0,
+                "schema_version": "",
+                "run_id": "",
+            }
+        )
+
+    return {
+        "mentions": mentions,
+        "relation_candidates": relation_candidates,
+        "measurements": measurements,
+        "conditions": conditions,
+        "claims": claims,
+        "evidence_spans": evidence_spans,
+    }
+
+
+def _heuristic_mentions(segment_text: str) -> list[dict]:
+    """Extract conservative technical name spans for deterministic tests."""
+    pattern = re.compile(
+        r"\b(?:[A-Z]{2,}[A-Za-z0-9/_-]*|[A-Z][a-z][A-Za-z0-9/_-]*)"
+        r"(?:\s+(?:[A-Z]{2,}[A-Za-z0-9/_-]*|[A-Z][a-z][A-Za-z0-9/_-]*))*\b"
+    )
+    mentions: list[dict] = []
+    seen: set[str] = set()
+    for match in pattern.finditer(segment_text):
+        text = match.group(0).strip()
+        text = re.sub(r"^(?:The|A|An)\s+", "", text)
+        key = text.casefold()
+        if len(text) < 2 or key in seen:
+            continue
+        seen.add(key)
+        mentions.append(
+            {
+                "mention_id": f"m{len(mentions) + 1}",
+                "text": text,
+                "mention_type": "entity",
+                "confidence": 0.72,
+                "_start": match.start(),
+                "_end": match.end(),
+            }
+        )
+    if not mentions:
+        mentions.append(
+            {
+                "mention_id": "m1",
+                "text": "system",
+                "mention_type": "entity",
+                "confidence": 0.5,
+                "_start": 0,
+                "_end": 0,
+            }
+        )
+    return mentions
+
+
+def _heuristic_relations(segment_text: str, mentions: list[dict]) -> list[dict]:
+    relation_patterns = (
+        (r"\bdepends\s+on\b", "depends_on"),
+        (r"\bretries?\b", "retries"),
+        (r"\buses?\b", "uses"),
+        (r"\brequires?\b", "depends_on"),
+        (r"\baffects?\b", "affects"),
+        (r"\bincreases?\b", "increases"),
+        (r"\bdecreases?\b", "decreases"),
+        (r"\bpart\s+of\b", "part_of"),
+        (r"\bincludes?\b", "includes"),
+        (r"\bachieves?\b", "achieves"),
+    )
+    relations: list[dict] = []
+    positioned = [
+        item for item in mentions
+        if isinstance(item.get("_start"), int)
+    ]
+    for expression, predicate in relation_patterns:
+        for match in re.finditer(expression, segment_text, flags=re.IGNORECASE):
+            before = [item for item in positioned if item.get("_end", 0) <= match.start()]
+            after = [item for item in positioned if item.get("_start", 0) >= match.end()]
+            if not before or not after:
+                continue
+            subject = max(before, key=lambda item: int(item.get("_end", 0)))
+            obj = min(after, key=lambda item: int(item.get("_start", 0)))
+            if subject["mention_id"] == obj["mention_id"]:
+                continue
+            relations.append(
+                {
+                    "subject_mention_id": subject["mention_id"],
+                    "predicate": predicate,
+                    "object_mention_id": obj["mention_id"],
+                    "evidence": segment_text,
+                    "confidence": 0.68,
+                }
+            )
+
+    measurement_mentions = [
+        item for item in mentions if item.get("mention_type") == "measurement"
+    ]
+    non_measurements = [
+        item for item in mentions if item.get("mention_type") != "measurement"
+    ]
+    for measurement in measurement_mentions:
+        if not non_measurements:
+            continue
+        subject = min(
+            non_measurements,
+            key=lambda item: abs(
+                int(item.get("_start", 0)) - int(measurement.get("_start", 0))
+            ),
+        )
+        relations.append(
+            {
+                "subject_mention_id": subject["mention_id"],
+                "predicate": "has_measurement",
+                "object_mention_id": measurement["mention_id"],
+                "evidence": segment_text,
+                "confidence": 0.64,
+            }
+        )
+
+    if not relations and len(mentions) >= 2:
+        relations.append(
+            {
+                "subject_mention_id": mentions[0]["mention_id"],
+                "predicate": "related_to",
+                "object_mention_id": mentions[1]["mention_id"],
+                "evidence": segment_text,
+                "confidence": 0.5,
+            }
+        )
+    return relations
 
 
 def _measurement_from_text(text: str, evidence: str, confidence: float) -> dict[str, Any] | None:
@@ -691,6 +994,17 @@ def _parse_json_atoms(content: str) -> list[dict[str, Any]]:
     if not isinstance(parsed, list):
         raise ValueError("DeepSeek extractor response must be a JSON array")
     return [item for item in parsed if isinstance(item, dict)]
+
+
+def _parse_json_object(content: str) -> dict[str, Any]:
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?", "", cleaned).strip()
+        cleaned = re.sub(r"```$", "", cleaned).strip()
+    parsed = json.loads(cleaned)
+    if not isinstance(parsed, dict):
+        raise ValueError("Joint graph extractor response must be a JSON object")
+    return parsed
 
 
 def _parse_json_relations(content: str) -> list[dict[str, Any]]:

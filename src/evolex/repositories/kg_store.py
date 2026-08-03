@@ -311,9 +311,30 @@ class KGStore:
             for row in rows
         ]
 
+    def begin(self) -> None:
+        self.conn.execute("BEGIN IMMEDIATE")
+
+    def rollback(self) -> None:
+        self.conn.rollback()
+
+    def clear_published_snapshot(self, run_id: str) -> None:
+        """Clear one per-run publication inside the caller's transaction.
+
+        A publication database is named by run ID, so graph object tables do
+        not carry a second run_id column.  Clearing and rebuilding the snapshot
+        makes a retry after a lost checkpoint idempotent.  If rebuilding fails,
+        the surrounding rollback restores the previous successful snapshot.
+        """
+        self.conn.execute("DELETE FROM relations")
+        self.conn.execute("DELETE FROM entity_segments")
+        self.conn.execute("DELETE FROM entities")
+        self.conn.execute("DELETE FROM quality_scores WHERE run_id = ?", (run_id,))
+        self.conn.execute("DELETE FROM entity_decisions WHERE run_id = ?", (run_id,))
+        self.conn.execute("DELETE FROM run_audit WHERE run_id = ?", (run_id,))
+        self.conn.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
+
     def commit(self) -> None:
         self.conn.commit()
 
     def close(self) -> None:
-        self.conn.commit()
         self.conn.close()

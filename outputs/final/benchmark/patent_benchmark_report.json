@@ -1,0 +1,617 @@
+{
+  "benchmark_type": "deterministic_project_engineering_regression",
+  "canonicalization": {
+    "alias_group_count": 1,
+    "canonical_identity_count_after": 1,
+    "duplicate_identity_reduction": 0.5,
+    "groups": [
+      {
+        "canonical_identity_count": 1,
+        "canonical_identity_ids": [
+          "ce-5dde8aa53689f0c6"
+        ],
+        "declared_surface_forms": [
+          "api gateway",
+          "api gw"
+        ],
+        "group": "api-gateway"
+      }
+    ],
+    "surface_identity_count_before": 2
+  },
+  "corpus_path": "benchmarks/patent_joint_kg_corpus.json",
+  "created_at": "2026-07-31T12:51:20.906504+00:00",
+  "deltas": {
+    "endpoint_id_validity": 0.0,
+    "entity_f1": 0.9574,
+    "joint_materialization_rate": 1.0,
+    "publish_rate": 1.0,
+    "relation_endpoint_pair_accuracy": 1.0,
+    "relation_evidence_contract_coverage": 1.0,
+    "relation_f1": 1.0
+  },
+  "document_count": 8,
+  "evolution_safety": {
+    "committed_version_count": 8,
+    "consensus_accept_rate": 1.0,
+    "deterministic_replay_pass_rate": 1.0,
+    "evaluated_patch_count": 8,
+    "rollback_probe": {
+      "compensation_operation_count": 3,
+      "compensation_version_id": "gv-20260731125120889453-rollback-g",
+      "history_preserved": true,
+      "initial_history_count": 0,
+      "passed": true,
+      "post_rollback_entity_count": 0,
+      "post_rollback_relation_count": 0,
+      "pre_rollback_entity_count": 2,
+      "pre_rollback_relation_count": 1,
+      "target_version_id": "gv-20260731125120761535-f97bcbefa9"
+    },
+    "shadow_gate_pass_rate": 1.0
+  },
+  "interpretation": [
+    "On this frozen project-owned corpus, joint extraction preserves mention-scoped relation endpoints and evidence IDs through materialization.",
+    "The canonical registry consolidates the declared API Gateway/API GW alias group across independent document runs.",
+    "Shadow replay and compensating rollback are executable safety checks; they do not establish novelty or freedom to operate."
+  ],
+  "protocol": {
+    "joint_agent": "HeuristicTypedExtractor joint mention/relation candidates -> mention-ID endpoint resolution -> entity/relation canonicalization Agents -> evidence contract -> shadow gate -> canonical commit",
+    "legacy_separate": "HeuristicExtractor -> independent typed conversion -> post-resolution relation fallback",
+    "limitations": [
+      "This is a small project-owned regression corpus, not an external benchmark.",
+      "The examples are designed to exercise relation endpoint preservation, predicate extraction, alias consolidation, evidence contracts, and evolution gates.",
+      "Results must not be represented as state-of-the-art performance or generalized to arbitrary domains."
+    ],
+    "network_calls": 0
+  },
+  "status": "ok",
+  "variants": {
+    "joint_agent": {
+      "counts": {
+        "gold_entities": 16,
+        "gold_relations": 8,
+        "predicted_entities": 16,
+        "predicted_relations": 8
+      },
+      "documents": [
+        {
+          "document_id": "joint-001",
+          "gold_entities": [
+            "api gateway",
+            "http"
+          ],
+          "gold_relations": [
+            [
+              "api gateway",
+              "retries",
+              "http"
+            ]
+          ],
+          "policy_action": "publish",
+          "predicted_entities": [
+            "api gateway",
+            "http"
+          ],
+          "predicted_relations": [
+            [
+              "api gateway",
+              "retries",
+              "http"
+            ]
+          ],
+          "relation_extraction_mode": "joint",
+          "status": "published"
+        },
+        {
+          "document_id": "joint-002",
+          "gold_entities": [
+            "api gw",
+            "retry policy"
+          ],
+          "gold_relations": [
+            [
+              "api gw",
+              "depends_on",
+              "retry policy"
+            ]
+          ],
+          "policy_action": "publish",
+          "predicted_entities": [
+            "api gw",
+            "retry policy"
+          ],
+          "predicted_relations": [
+            [
+              "api gw",
+              "depends_on",
+              "retry policy"
+            ]
+          ],
+          "relation_extraction_mode": "joint",
+          "status": "published"
+        },
+        {
+          "document_id": "joint-003",
+          "gold_entities": [
+            "entity resolver",
+            "knowledge graph"
+          ],
+          "gold_relations": [
+            [
+              "knowledge graph",
+              "uses",
+              "entity resolver"
+            ]
+          ],
+          "policy_action": "publish",
+          "predicted_entities": [
+            "entity resolver",
+            "knowledge graph"
+          ],
+          "predicted_relations": [
+            [
+              "knowledge graph",
+              "uses",
+              "entity resolver"
+            ]
+          ],
+          "relation_extraction_mode": "joint",
+          "status": "published"
+        },
+        {
+          "document_id": "joint-004",
+          "gold_entities": [
+            "graph store",
+            "sqlite database"
+          ],
+          "gold_relations": [
+            [
+              "graph store",
+              "depends_on",
+              "sqlite database"
+            ]
+          ],
+          "policy_action": "publish",
+          "predicted_entities": [
+            "graph store",
+            "sqlite database"
+          ],
+          "predicted_relations": [
+            [
+              "graph store",
+              "depends_on",
+              "sqlite database"
+            ]
+          ],
+          "relation_extraction_mode": "joint",
+          "status": "published"
+        },
+        {
+          "document_id": "joint-005",
+          "gold_entities": [
+            "policy agent",
+            "risk gate"
+          ],
+          "gold_relations": [
+            [
+              "policy agent",
+              "includes",
+              "risk gate"
+            ]
+          ],
+          "policy_action": "publish",
+          "predicted_entities": [
+            "policy agent",
+            "risk gate"
+          ],
+          "predicted_relations": [
+            [
+              "policy agent",
+              "includes",
+              "risk gate"
+            ]
+          ],
+          "relation_extraction_mode": "joint",
+          "status": "published"
+        },
+        {
+          "document_id": "joint-006",
+          "gold_entities": [
+            "evidence coverage",
+            "extraction agent"
+          ],
+          "gold_relations": [
+            [
+              "extraction agent",
+              "achieves",
+              "evidence coverage"
+            ]
+          ],
+          "policy_action": "publish",
+          "predicted_entities": [
+            "evidence coverage",
+            "extraction agent"
+          ],
+          "predicted_relations": [
+            [
+              "extraction agent",
+              "achieves",
+              "evidence coverage"
+            ]
+          ],
+          "relation_extraction_mode": "joint",
+          "status": "published"
+        },
+        {
+          "document_id": "joint-007",
+          "gold_entities": [
+            "governance layer",
+            "schema registry"
+          ],
+          "gold_relations": [
+            [
+              "schema registry",
+              "part_of",
+              "governance layer"
+            ]
+          ],
+          "policy_action": "publish",
+          "predicted_entities": [
+            "governance layer",
+            "schema registry"
+          ],
+          "predicted_relations": [
+            [
+              "schema registry",
+              "part_of",
+              "governance layer"
+            ]
+          ],
+          "relation_extraction_mode": "joint",
+          "status": "published"
+        },
+        {
+          "document_id": "joint-008",
+          "gold_entities": [
+            "latency budget",
+            "model router"
+          ],
+          "gold_relations": [
+            [
+              "model router",
+              "affects",
+              "latency budget"
+            ]
+          ],
+          "policy_action": "publish",
+          "predicted_entities": [
+            "latency budget",
+            "model router"
+          ],
+          "predicted_relations": [
+            [
+              "model router",
+              "affects",
+              "latency budget"
+            ]
+          ],
+          "relation_extraction_mode": "joint",
+          "status": "published"
+        }
+      ],
+      "evolution_safety": {
+        "committed_version_count": 8,
+        "consensus_accept_rate": 1.0,
+        "deterministic_replay_pass_rate": 1.0,
+        "evaluated_patch_count": 8,
+        "shadow_gate_pass_rate": 1.0
+      },
+      "metrics": {
+        "elapsed_seconds": 2.5027,
+        "endpoint_id_validity": 1.0,
+        "entity_f1": 1.0,
+        "entity_precision": 1.0,
+        "entity_recall": 1.0,
+        "joint_materialization_rate": 1.0,
+        "predicted_entity_count": 16,
+        "predicted_relation_count": 8,
+        "publish_rate": 1.0,
+        "relation_endpoint_pair_accuracy": 1.0,
+        "relation_evidence_contract_coverage": 1.0,
+        "relation_f1": 1.0,
+        "relation_precision": 1.0,
+        "relation_recall": 1.0
+      },
+      "name": "joint_agent"
+    },
+    "legacy_separate": {
+      "counts": {
+        "gold_entities": 16,
+        "gold_relations": 8,
+        "predicted_entities": 31,
+        "predicted_relations": 12
+      },
+      "documents": [
+        {
+          "document_id": "joint-001",
+          "gold_entities": [
+            "api gateway",
+            "http"
+          ],
+          "gold_relations": [
+            [
+              "api gateway",
+              "retries",
+              "http"
+            ]
+          ],
+          "policy_action": "reject",
+          "predicted_entities": [
+            "api",
+            "gateway",
+            "http"
+          ],
+          "predicted_relations": [],
+          "relation_extraction_mode": "heuristic_fallback",
+          "status": "rejected"
+        },
+        {
+          "document_id": "joint-002",
+          "gold_entities": [
+            "api gw",
+            "retry policy"
+          ],
+          "gold_relations": [
+            [
+              "api gw",
+              "depends_on",
+              "retry policy"
+            ]
+          ],
+          "policy_action": "reject",
+          "predicted_entities": [
+            "api",
+            "gw",
+            "policy",
+            "retry"
+          ],
+          "predicted_relations": [
+            [
+              "api",
+              "has_property",
+              "retry"
+            ],
+            [
+              "gw",
+              "has_property",
+              "retry"
+            ],
+            [
+              "policy",
+              "has_property",
+              "retry"
+            ],
+            [
+              "retry",
+              "has_property",
+              "retry"
+            ]
+          ],
+          "relation_extraction_mode": "heuristic_fallback",
+          "status": "rejected"
+        },
+        {
+          "document_id": "joint-003",
+          "gold_entities": [
+            "entity resolver",
+            "knowledge graph"
+          ],
+          "gold_relations": [
+            [
+              "knowledge graph",
+              "uses",
+              "entity resolver"
+            ]
+          ],
+          "policy_action": "reject",
+          "predicted_entities": [
+            "entity",
+            "graph",
+            "knowledge",
+            "resolver"
+          ],
+          "predicted_relations": [],
+          "relation_extraction_mode": "heuristic_fallback",
+          "status": "rejected"
+        },
+        {
+          "document_id": "joint-004",
+          "gold_entities": [
+            "graph store",
+            "sqlite database"
+          ],
+          "gold_relations": [
+            [
+              "graph store",
+              "depends_on",
+              "sqlite database"
+            ]
+          ],
+          "policy_action": "reject",
+          "predicted_entities": [
+            "database",
+            "graph",
+            "sqlite",
+            "store"
+          ],
+          "predicted_relations": [],
+          "relation_extraction_mode": "heuristic_fallback",
+          "status": "rejected"
+        },
+        {
+          "document_id": "joint-005",
+          "gold_entities": [
+            "policy agent",
+            "risk gate"
+          ],
+          "gold_relations": [
+            [
+              "policy agent",
+              "includes",
+              "risk gate"
+            ]
+          ],
+          "policy_action": "reject",
+          "predicted_entities": [
+            "agent",
+            "gate",
+            "policy",
+            "risk"
+          ],
+          "predicted_relations": [],
+          "relation_extraction_mode": "heuristic_fallback",
+          "status": "rejected"
+        },
+        {
+          "document_id": "joint-006",
+          "gold_entities": [
+            "evidence coverage",
+            "extraction agent"
+          ],
+          "gold_relations": [
+            [
+              "extraction agent",
+              "achieves",
+              "evidence coverage"
+            ]
+          ],
+          "policy_action": "reject",
+          "predicted_entities": [
+            "agent",
+            "coverage",
+            "evidence",
+            "extraction"
+          ],
+          "predicted_relations": [],
+          "relation_extraction_mode": "heuristic_fallback",
+          "status": "rejected"
+        },
+        {
+          "document_id": "joint-007",
+          "gold_entities": [
+            "governance layer",
+            "schema registry"
+          ],
+          "gold_relations": [
+            [
+              "schema registry",
+              "part_of",
+              "governance layer"
+            ]
+          ],
+          "policy_action": "reject",
+          "predicted_entities": [
+            "governance",
+            "layer",
+            "registry",
+            "schema"
+          ],
+          "predicted_relations": [
+            [
+              "governance",
+              "has_property",
+              "schema"
+            ],
+            [
+              "layer",
+              "has_property",
+              "schema"
+            ],
+            [
+              "registry",
+              "has_property",
+              "schema"
+            ],
+            [
+              "schema",
+              "has_property",
+              "schema"
+            ]
+          ],
+          "relation_extraction_mode": "heuristic_fallback",
+          "status": "rejected"
+        },
+        {
+          "document_id": "joint-008",
+          "gold_entities": [
+            "latency budget",
+            "model router"
+          ],
+          "gold_relations": [
+            [
+              "model router",
+              "affects",
+              "latency budget"
+            ]
+          ],
+          "policy_action": "reject",
+          "predicted_entities": [
+            "budget",
+            "latency",
+            "model",
+            "router"
+          ],
+          "predicted_relations": [
+            [
+              "budget",
+              "has_property",
+              "latency"
+            ],
+            [
+              "latency",
+              "has_property",
+              "latency"
+            ],
+            [
+              "model",
+              "has_property",
+              "latency"
+            ],
+            [
+              "router",
+              "has_property",
+              "latency"
+            ]
+          ],
+          "relation_extraction_mode": "heuristic_fallback",
+          "status": "rejected"
+        }
+      ],
+      "evolution_safety": {
+        "committed_version_count": 0,
+        "consensus_accept_rate": 0.0,
+        "deterministic_replay_pass_rate": 0.0,
+        "evaluated_patch_count": 0,
+        "shadow_gate_pass_rate": 0.0
+      },
+      "metrics": {
+        "elapsed_seconds": 1.0563,
+        "endpoint_id_validity": 1.0,
+        "entity_f1": 0.0426,
+        "entity_precision": 0.0323,
+        "entity_recall": 0.0625,
+        "joint_materialization_rate": 0.0,
+        "predicted_entity_count": 31,
+        "predicted_relation_count": 12,
+        "publish_rate": 0.0,
+        "relation_endpoint_pair_accuracy": 0.0,
+        "relation_evidence_contract_coverage": 0.0,
+        "relation_f1": 0.0,
+        "relation_precision": 0.0,
+        "relation_recall": 0.0
+      },
+      "name": "legacy_separate"
+    }
+  }
+}

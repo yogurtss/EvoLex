@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evolex"
-version = "0.2.0"
-description = "Conversational CLI and controlled harness for technical document knowledge extraction."
+version = "0.3.0"
+description = "Evidence-governed multi-agent platform for joint knowledge-graph extraction and controlled self-evolution."
 requires-python = ">=3.11"
 dependencies = [
   "typer>=0.12",

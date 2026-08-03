@@ -1,0 +1,241 @@
+{
+  "stage": 1,
+  "source_map": [
+    {
+      "id": "C001",
+      "type": "code",
+      "locator": "src/evolex/agents/deepseek_client.py，TypedExtractor.extract_typed、OpenAICompatibleExtractor.extract_typed",
+      "summary": "同一源片段的一次结构化响应同时生成提及、关系候选、测量和条件，关系端点引用同响应提及标识。",
+      "confidence": "high"
+    },
+    {
+      "id": "C002",
+      "type": "code",
+      "locator": "src/evolex/nodes/extract.py，make_extract_node、_namespace_typed_batch",
+      "summary": "对每个片段的提及、证据、主张和关系候选标识加入片段命名空间，并保留来源文档与运行上下文。",
+      "confidence": "high"
+    },
+    {
+      "id": "C003",
+      "type": "code",
+      "locator": "src/evolex/nodes/validate.py，validate_node",
+      "summary": "先按证据标识、来源文档标识和证据文本过滤证据对象，再以有效证据标识集合分别校验主张和关系候选，并输出无效关系证据引用失败记录。",
+      "confidence": "high"
+    },
+    {
+      "id": "C004",
+      "type": "code",
+      "locator": "src/evolex/nodes/entity_resolve.py，entity_resolve_node；src/evolex/nodes/entity_merge.py，entity_merge_node",
+      "summary": "执行类型约束的提及解析、别名与单位归一化，并通过来源完整性门和 complete-link 簇约束合并同类实体。",
+      "confidence": "high"
+    },
+    {
+      "id": "C005",
+      "type": "code",
+      "locator": "src/evolex/nodes/relation_extract.py，make_relation_extract_node、_materialize_joint_relations",
+      "summary": "根据提及到实体映射物化联合关系，对悬空端点和规范端点坍缩形成审计失败，仅在无有效联合关系可物化时回退。",
+      "confidence": "high"
+    },
+    {
+      "id": "C006",
+      "type": "code",
+      "locator": "src/evolex/nodes/relation_merge.py，canonicalize_predicate、relation_merge_node",
+      "summary": "规范谓词、排序对称关系端点，以端点、谓词及限定信息摘要区分关系身份，聚合重复证据并保留逐条源断言快照。",
+      "confidence": "high"
+    },
+    {
+      "id": "C007",
+      "type": "code",
+      "locator": "src/evolex/nodes/evolution.py，_build_patch",
+      "summary": "把规范实体和关系转换为操作级证据化 upsert 补丁；每个操作携带证据契约、端点依赖和声明影响域。",
+      "confidence": "high"
+    },
+    {
+      "id": "C008",
+      "type": "code",
+      "locator": "src/evolex/nodes/evolution.py，_derive_impact_domain、_evaluate_patch",
+      "summary": "从操作声明域、证据契约、关系端点和基线一跳依赖派生原始影响域并冻结其摘要，后续反事实重放和排除集合求解均使用同一验证边界。",
+      "confidence": "high"
+    },
+    {
+      "id": "C009",
+      "type": "code",
+      "locator": "src/evolex/nodes/evolution.py，_apply_shadow、_unaffected_projection",
+      "summary": "在内存影子图中应用补丁，执行端点完整性、规范关系唯一性、确定性重放和冻结影响域外投影一致性检查。",
+      "confidence": "high"
+    },
+    {
+      "id": "C010",
+      "type": "code",
+      "locator": "src/evolex/nodes/evolution.py，_minimum_cost_compensation、_dependency_closed_exclusions",
+      "summary": "以逐操作依赖闭包排除和同基线反事实重放验证失败关联，对验证后的候选做依赖闭包求解；候选不超过十六个时精确枚举，超过时使用明确标记的固定点局部回退。",
+      "confidence": "high"
+    },
+    {
+      "id": "C011",
+      "type": "code",
+      "locator": "src/evolex/nodes/evolution.py，evolution_consensus_node；src/evolex/agentic/metrics.py，publish_gate",
+      "summary": "证据契约、确定性重放、非干扰、不变量和更新效用形成基础验证门，内容寻址因果验证凭证一致性形成附加提交门。",
+      "confidence": "high"
+    },
+    {
+      "id": "C012",
+      "type": "code",
+      "locator": "src/evolex/repositories/canonical.py，commit_patch",
+      "summary": "在 canonical 单库事务中核对由候选补丁、父版本、接受操作摘要和凭证标识形成的提交清单，进行幂等与父版本校验，并写入图对象、版本事件和活动版本。",
+      "confidence": "high"
+    },
+    {
+      "id": "C013",
+      "type": "code",
+      "locator": "src/evolex/repositories/canonical.py，rollback_version、贡献重算及 tombstone 辅助方法",
+      "summary": "以追加补偿版本移除目标版本贡献，结合实体与关系墓碑重算存活状态，保留后续贡献或后续删除。",
+      "confidence": "high"
+    },
+    {
+      "id": "C014",
+      "type": "code",
+      "locator": "src/evolex/repositories/schema_store.py，put_proposal、promote_proposal；src/evolex/nodes/schema_proposer.py",
+      "summary": "以内容稳定标识累积 schema 证据，并在即时事务锁内重新读取活动版本后晋升，运行开始时固定使用版本。",
+      "confidence": "high"
+    },
+    {
+      "id": "C015",
+      "type": "code",
+      "locator": "src/evolex/agentic/controller.py，AgenticKGRunner；src/evolex/graph/builder.py",
+      "summary": "多个技术判定模块按依赖图执行，上游修订使下游结果失效，并保留运行检查点和审计轨迹。",
+      "confidence": "high"
+    },
+    {
+      "id": "C016",
+      "type": "code",
+      "locator": "src/evolex/visualization/dashboard.py，build_dashboard、build_dashboard_bundle；src/evolex/repositories/canonical.py，snapshot_for_document；tests/test_visualization_bundle.py",
+      "summary": "生成一份当前活动规范图的自包含交互页面及按来源文档内容快照分别投影的自包含页面；文档投影以实体提及和关系证据的document_id为直接边界，只补齐已选关系端点，并由测试验证共享实体不扩张其他文档关系。该展示能力属于可选治理和软件产品特征，不作为当前正式权利要求创新点。",
+      "confidence": "medium"
+    },
+    {
+      "id": "C017",
+      "type": "test",
+      "locator": "tests/test_joint_evolution.py、tests/test_governance_hardening.py、tests/test_patent_benchmark.py",
+      "summary": "对联合端点物化、合并边界、补偿硬门、事务版本和项目自有回归语料提供可执行验证。",
+      "confidence": "high"
+    },
+    {
+      "id": "C018",
+      "type": "documentation",
+      "locator": "docs/technical_design.md、docs/evaluation.md、docs/security_and_governance.md",
+      "summary": "记录实现边界、评估限制、信任边界和非保证事项。",
+      "confidence": "high"
+    },
+    {
+      "id": "C019",
+      "type": "code",
+      "locator": "src/evolex/nodes/evolution.py，_verify_failed_query_attributions、_build_validation_certificate、_validation_certificate_matches、_decision_matches_certificate",
+      "summary": "通过依赖闭包反事实重放验证查询—操作原因，生成绑定基线、冻结影响域、查询原因、排除集合、保留操作、求解结果和门结果的内容寻址凭证，并在共识和提交前两次重算核对。",
+      "confidence": "high"
+    },
+    {
+      "id": "C020",
+      "type": "test",
+      "locator": "tests/test_governance_hardening.py，test_causal_validation_certificate_blocks_attribution_tampering、test_idempotent_patch_rejects_different_certificate_bound_selection、test_large_causal_candidate_space_uses_labelled_fixed_point_fallback",
+      "summary": "覆盖基线、查询关联、求解结果、排除集合、最终影子摘要和提交选择篡改，以及同补丁不同提交清单重试拒绝和大候选空间标记回退。",
+      "confidence": "high"
+    },
+    {
+      "id": "E001",
+      "type": "equation",
+      "locator": "src/evolex/nodes/relation_merge.py，_aggregate_confidence",
+      "summary": "带后续证据折扣的 noisy-OR 关系置信度聚合。",
+      "confidence": "high"
+    },
+    {
+      "id": "E002",
+      "type": "equation",
+      "locator": "src/evolex/nodes/relation_merge.py，_aggregate_confidence",
+      "summary": "根据最高单项置信度和片段数设置关系置信度上限。",
+      "confidence": "high"
+    },
+    {
+      "id": "E003",
+      "type": "equation",
+      "locator": "src/evolex/nodes/evolution.py，_compensation_objective",
+      "summary": "以排除操作数量、影响半径和证据损失构造补偿代价。",
+      "confidence": "high"
+    },
+    {
+      "id": "E004",
+      "type": "equation",
+      "locator": "src/evolex/agentic/agents.py，AgentProposal.utility",
+      "summary": "以预期信息增益减去成本和风险形成 Agent 动作效用。",
+      "confidence": "high"
+    },
+    {
+      "id": "E005",
+      "type": "equation",
+      "locator": "src/evolex/nodes/evolution.py，_build_validation_certificate、_snapshot_hash",
+      "summary": "对规范序列化的验证清单计算SHA-256内容摘要以形成因果验证凭证标识。",
+      "confidence": "high"
+    },
+    {
+      "id": "E006",
+      "type": "equation",
+      "locator": "src/evolex/repositories/canonical.py，commit_patch、_content_hash",
+      "summary": "对补丁标识、父版本、接受操作标识、接受操作摘要和凭证标识计算提交清单摘要。",
+      "confidence": "high"
+    },
+    {
+      "id": "F001",
+      "type": "source-figure",
+      "locator": "docs/patent_strategy.md，第4节核心保护链",
+      "summary": "S1至S6候选图补丁验证、反事实局部排除、凭证绑定和版本提交方法链。",
+      "confidence": "high"
+    },
+    {
+      "id": "F002",
+      "type": "source-figure",
+      "locator": "docs/technical_design.md，总体架构与演进验证闭环",
+      "summary": "联合抽取、双层规范化、补丁、影子、门控和 canonical 存储的系统数据流。",
+      "confidence": "high"
+    },
+    {
+      "id": "F003",
+      "type": "source-figure",
+      "locator": "src/evolex/nodes/evolution.py，失败查询归因与补偿函数调用关系",
+      "summary": "影响域、失败查询、依赖闭包和补偿重放的方法结构。",
+      "confidence": "high"
+    },
+    {
+      "id": "F004",
+      "type": "source-figure",
+      "locator": "src/evolex/repositories/canonical.py，graph_versions、version_events、contribution、tombstone 数据表及方法",
+      "summary": "canonical 图版本提交与追加补偿生命周期。",
+      "confidence": "high"
+    },
+    {
+      "id": "F005",
+      "type": "source-figure",
+      "locator": "src/evolex/nodes/evolution.py，反事实归因与因果验证凭证数据流",
+      "summary": "冻结影响域、反事实查询归因、排除集合、剩余子补丁和验证凭证之间的机制。",
+      "confidence": "high"
+    },
+    {
+      "id": "F006",
+      "type": "source-figure",
+      "locator": "src/evolex/nodes/extract.py、validate.py、entity_merge.py、relation_merge.py",
+      "summary": "联合实体关系证据抽取、证据先行校验以及实体和关系规范化数据流。",
+      "confidence": "high"
+    }
+  ],
+  "inspection": {
+    "method": "inspected",
+    "implementation": "inspected",
+    "tests": "inspected",
+    "limitations": "inspected",
+    "formulas": "inspected",
+    "methodology_figures": "redraw required",
+    "public_benchmark": "unavailable; project-owned regression corpus only"
+  },
+  "gate": {
+    "status": "passed"
+  }
+}

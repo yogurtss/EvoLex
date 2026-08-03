@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from evolex.nodes.relation_merge import FUNCTIONAL_PREDICATES
+
 
 def graph_metrics(state: dict[str, Any]) -> dict[str, float]:
     entities = state.get("entities", [])
@@ -53,6 +55,20 @@ def publish_confidence(state: dict[str, Any]) -> float:
     return round(max(0.0, min(1.0, confidence)), 4)
 
 
+def publish_gate(
+    state: dict[str, Any],
+    *,
+    default_threshold: float = 0.45,
+) -> tuple[bool, float, float]:
+    confidence = publish_confidence(state)
+    budget = state.get("agent_budget", {})
+    threshold = float(
+        budget.get("publish_confidence_threshold", default_threshold)
+    )
+    sparse_ok = graph_metrics(state)["graph_sparse_penalty"] <= 0.7
+    return confidence >= threshold and sparse_ok, confidence, threshold
+
+
 def _relation_evidence_coverage(relations: list[dict]) -> float:
     if not relations:
         return 0.0
@@ -68,9 +84,12 @@ def _conflict_score(relations: list[dict]) -> float:
         return 0.0
     objects_by_pair: dict[tuple[str, str], set[str]] = defaultdict(set)
     for relation in relations:
+        predicate = str(relation.get("predicate", ""))
+        if predicate not in FUNCTIONAL_PREDICATES:
+            continue
         key = (
             str(relation.get("subject_entity_id", "")),
-            str(relation.get("predicate", "")),
+            predicate,
         )
         objects_by_pair[key].add(str(relation.get("object_entity_id", "")))
     conflict_pairs = sum(1 for values in objects_by_pair.values() if len(values) > 1)

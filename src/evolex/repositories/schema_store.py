@@ -8,6 +8,19 @@ from typing import Any
 DEFAULT_SCHEMA_DIR = Path("data/schema_candidates")
 MIN_PROMOTION_OCCURRENCES = 3
 MIN_PROMOTION_DOCUMENTS = 2
+BASE_SCHEMA_VERSION = "evolex-base-0.1.0"
+BASE_TYPES = {
+    "entity", "process", "material", "tool", "measurement",
+    "property", "claim", "event", "condition",
+}
+BASE_PREDICATES = {
+    "has_measurement", "has_property", "depends_on", "related_to",
+    "has_condition", "has_parameter", "affects", "increases",
+    "decreases", "part_of", "uses", "includes", "achieves", "retries",
+}
+BASE_ATTRIBUTES = {
+    "time", "temperature", "pressure", "voltage", "current", "rate", "percentage",
+}
 
 
 def _merge_json_lists(existing_json: str | None, new_values: list[Any]) -> list[Any]:
@@ -37,8 +50,14 @@ class SchemaCandidateStore:
     def _connect(self):
         import sqlite3
 
-        conn = sqlite3.connect(str(self._db_path))
-        conn.execute("PRAGMA journal_mode=WAL")
+        conn = sqlite3.connect(str(self._db_path), timeout=30.0)
+        conn.execute("PRAGMA busy_timeout=30000")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                conn.close()
+                raise
         self._init_schema(conn)
         return conn
 
@@ -59,6 +78,7 @@ class SchemaCandidateStore:
                 relation_pattern_consistency REAL NOT NULL DEFAULT 0.0,
                 evidence_coverage REAL NOT NULL DEFAULT 0.0,
                 source_run_ids TEXT,
+                source_document_ids TEXT,
                 schema_version TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'candidate',
                 created_at TEXT NOT NULL,
@@ -87,8 +107,54 @@ class SchemaCandidateStore:
                 ON schema_promotions(proposal_id);
             CREATE INDEX IF NOT EXISTS idx_schema_promotions_action
                 ON schema_promotions(action);
+
+            CREATE TABLE IF NOT EXISTS schema_versions (
+                version_id TEXT PRIMARY KEY,
+                parent_version_id TEXT,
+                types_json TEXT NOT NULL,
+                predicates_json TEXT NOT NULL,
+                attributes_json TEXT NOT NULL,
+                activated_by_proposal_id TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS schema_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(schema_proposals)").fetchall()
+        }
+        if "source_document_ids" not in columns:
+            conn.execute(
+                "ALTER TABLE schema_proposals ADD COLUMN source_document_ids TEXT"
+            )
+        now = datetime.now(UTC).isoformat()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO schema_versions
+            (version_id, parent_version_id, types_json, predicates_json,
+             attributes_json, activated_by_proposal_id, created_at)
+            VALUES (?, NULL, ?, ?, ?, NULL, ?)
+            """,
+            (
+                BASE_SCHEMA_VERSION,
+                json.dumps(sorted(BASE_TYPES)),
+                json.dumps(sorted(BASE_PREDICATES)),
+                json.dumps(sorted(BASE_ATTRIBUTES)),
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO schema_metadata(key, value)
+            VALUES ('active_schema_version', ?)
+            """,
+            (BASE_SCHEMA_VERSION,),
+        )
+        conn.commit()
 
     def put_proposal(self, proposal: dict) -> None:
         """Insert or update a schema proposal.
@@ -98,34 +164,52 @@ class SchemaCandidateStore:
         """
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             now = datetime.now(UTC).isoformat()
             existing = conn.execute(
-                "SELECT proposal_id, occurrence_count, independent_document_count, supporting_texts, evidence_spans, source_run_ids FROM schema_proposals WHERE proposal_type = ? AND name = ? ORDER BY updated_at DESC LIMIT 1",
+                "SELECT proposal_id, occurrence_count, independent_document_count, supporting_texts, evidence_spans, source_run_ids, source_document_ids FROM schema_proposals WHERE proposal_type = ? AND name = ? ORDER BY updated_at DESC LIMIT 1",
                 (proposal["proposal_type"], proposal["name"]),
             ).fetchone()
 
             if existing:
                 existing_id = existing[0]
+                existing_run_ids = _merge_json_lists(existing[5], [])
+                incoming_run_ids = list(proposal.get("source_run_ids", []))
                 supporting_texts = _merge_json_lists(existing[3], proposal.get("supporting_texts", []))
                 evidence_spans = _merge_json_lists(existing[4], proposal.get("evidence_spans", []))
-                source_run_ids = _merge_json_lists(existing[5], proposal.get("source_run_ids", []))
-                new_count = existing[1] + proposal.get("occurrence_count", 1)
-                new_docs = max(existing[2], len(source_run_ids), proposal.get("independent_document_count", 1))
+                source_run_ids = _merge_json_lists(existing[5], incoming_run_ids)
+                source_document_ids = _merge_json_lists(
+                    existing[6],
+                    proposal.get(
+                        "source_document_ids",
+                        proposal.get("source_run_ids", []),
+                    ),
+                )
+                replayed_observation = bool(incoming_run_ids) and set(
+                    incoming_run_ids
+                ).issubset(set(existing_run_ids))
+                new_count = (
+                    existing[1]
+                    if replayed_observation
+                    else existing[1] + proposal.get("occurrence_count", 1)
+                )
+                new_docs = max(existing[2], len(source_document_ids))
                 conn.execute(
-                    "UPDATE schema_proposals SET occurrence_count = ?, independent_document_count = ?, supporting_texts = ?, evidence_spans = ?, source_run_ids = ?, updated_at = ? WHERE proposal_id = ?",
+                    "UPDATE schema_proposals SET occurrence_count = ?, independent_document_count = ?, supporting_texts = ?, evidence_spans = ?, source_run_ids = ?, source_document_ids = ?, updated_at = ? WHERE proposal_id = ?",
                     (
                         new_count,
                         new_docs,
                         json.dumps(supporting_texts, ensure_ascii=False),
                         json.dumps(evidence_spans, ensure_ascii=False),
                         json.dumps(source_run_ids, ensure_ascii=False),
+                        json.dumps(source_document_ids, ensure_ascii=False),
                         now,
                         existing_id,
                     ),
                 )
             else:
                 conn.execute(
-                    "INSERT INTO schema_proposals (proposal_id, proposal_type, name, description, supporting_texts, evidence_spans, occurrence_count, independent_document_count, relation_pattern_consistency, evidence_coverage, source_run_ids, schema_version, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO schema_proposals (proposal_id, proposal_type, name, description, supporting_texts, evidence_spans, occurrence_count, independent_document_count, relation_pattern_consistency, evidence_coverage, source_run_ids, source_document_ids, schema_version, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         proposal["proposal_id"],
                         proposal["proposal_type"],
@@ -134,10 +218,24 @@ class SchemaCandidateStore:
                         json.dumps(proposal.get("supporting_texts", [])),
                         json.dumps(proposal.get("evidence_spans", [])),
                         proposal.get("occurrence_count", 1),
-                        proposal.get("independent_document_count", 1),
+                        len(
+                            set(
+                                proposal.get(
+                                    "source_document_ids",
+                                    proposal.get("source_run_ids", []),
+                                )
+                            )
+                        )
+                        or proposal.get("independent_document_count", 1),
                         proposal.get("relation_pattern_consistency", 0.0),
                         proposal.get("evidence_coverage", 0.0),
                         json.dumps(proposal.get("source_run_ids", [])),
+                        json.dumps(
+                            proposal.get(
+                                "source_document_ids",
+                                proposal.get("source_run_ids", []),
+                            )
+                        ),
                         proposal.get("schema_version", ""),
                         "candidate",
                         now,
@@ -145,6 +243,9 @@ class SchemaCandidateStore:
                     ),
                 )
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -167,7 +268,7 @@ class SchemaCandidateStore:
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
             rows = conn.execute(
-                f"SELECT proposal_id, proposal_type, name, description, supporting_texts, evidence_spans, occurrence_count, independent_document_count, relation_pattern_consistency, evidence_coverage, source_run_ids, schema_version, status, created_at, updated_at FROM schema_proposals WHERE {where_clause} ORDER BY occurrence_count DESC, updated_at DESC LIMIT ?",
+                f"SELECT proposal_id, proposal_type, name, description, supporting_texts, evidence_spans, occurrence_count, independent_document_count, relation_pattern_consistency, evidence_coverage, source_run_ids, source_document_ids, schema_version, status, created_at, updated_at FROM schema_proposals WHERE {where_clause} ORDER BY occurrence_count DESC, updated_at DESC LIMIT ?",
                 (*params, limit),
             ).fetchall()
 
@@ -184,10 +285,11 @@ class SchemaCandidateStore:
                     "relation_pattern_consistency": r[8],
                     "evidence_coverage": r[9],
                     "source_run_ids": json.loads(r[10]) if r[10] else [],
-                    "schema_version": r[11],
-                    "status": r[12],
-                    "created_at": r[13],
-                    "updated_at": r[14],
+                    "source_document_ids": json.loads(r[11]) if r[11] else [],
+                    "schema_version": r[12],
+                    "status": r[13],
+                    "created_at": r[14],
+                    "updated_at": r[15],
                 }
                 for r in rows
             ]
@@ -288,13 +390,119 @@ class SchemaCandidateStore:
         proposal = self.get_proposal_by_id(proposal_id)
         if proposal is None:
             raise ValueError(f"proposal not found: {proposal_id}")
-        self._set_status_and_record(
-            proposal=proposal,
-            action="promoted",
-            target_schema_version=target_schema_version,
-            reason=reason,
-            report_path=report_path,
-        )
+        if not target_schema_version.strip():
+            raise ValueError("target schema version must not be empty")
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            active_row = conn.execute(
+                """
+                SELECT v.version_id, v.parent_version_id, v.types_json,
+                       v.predicates_json, v.attributes_json,
+                       v.activated_by_proposal_id, v.created_at
+                FROM schema_metadata m
+                JOIN schema_versions v ON v.version_id = m.value
+                WHERE m.key = 'active_schema_version'
+                """
+            ).fetchone()
+            if active_row is None:
+                raise RuntimeError("active schema metadata is missing")
+            active = {
+                "version_id": active_row[0],
+                "types": json.loads(active_row[2]),
+                "predicates": json.loads(active_row[3]),
+                "attributes": json.loads(active_row[4]),
+            }
+            if target_schema_version == active["version_id"]:
+                raise ValueError(
+                    f"target schema version is already active: {target_schema_version}"
+                )
+            current_status = conn.execute(
+                "SELECT status FROM schema_proposals WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+            if current_status is None:
+                raise ValueError(f"proposal not found: {proposal_id}")
+            if current_status[0] != "candidate":
+                raise ValueError(
+                    f"proposal is not a candidate: {proposal_id} ({current_status[0]})"
+                )
+
+            types = set(active["types"])
+            predicates = set(active["predicates"])
+            attributes = set(active["attributes"])
+            proposal_type = proposal.get("proposal_type")
+            name = str(proposal.get("name", "")).strip()
+            if proposal_type == "new_type":
+                types.add(name)
+            elif proposal_type == "new_relation":
+                predicates.add(name)
+            elif proposal_type == "new_attribute":
+                attributes.add(name)
+
+            now = datetime.now(UTC).isoformat()
+            exists = conn.execute(
+                "SELECT 1 FROM schema_versions WHERE version_id = ?",
+                (target_schema_version,),
+            ).fetchone()
+            if exists:
+                raise ValueError(
+                    f"target schema version already exists: {target_schema_version}"
+                )
+            conn.execute(
+                """
+                INSERT INTO schema_versions
+                (version_id, parent_version_id, types_json, predicates_json,
+                 attributes_json, activated_by_proposal_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_schema_version,
+                    active.get("version_id"),
+                    json.dumps(sorted(types), ensure_ascii=False),
+                    json.dumps(sorted(predicates), ensure_ascii=False),
+                    json.dumps(sorted(attributes), ensure_ascii=False),
+                    proposal.get("proposal_id"),
+                    now,
+                ),
+            )
+            conn.execute(
+                "UPDATE schema_proposals SET status = 'promoted', updated_at = ? "
+                "WHERE proposal_id = ?",
+                (now, proposal_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO schema_promotions
+                (proposal_id, proposal_type, name, action, from_schema_version,
+                 target_schema_version, reason, report_path, created_at)
+                VALUES (?, ?, ?, 'promoted', ?, ?, ?, ?, ?)
+                """,
+                (
+                    proposal_id,
+                    proposal.get("proposal_type", ""),
+                    proposal.get("name", ""),
+                    active.get("version_id", ""),
+                    target_schema_version,
+                    reason,
+                    report_path,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO schema_metadata(key, value)
+                VALUES ('active_schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (target_schema_version,),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
         return self.get_proposal_by_id(proposal_id) or proposal
 
     def block_proposal(
@@ -303,17 +511,16 @@ class SchemaCandidateStore:
         reason: str,
         report_path: str | None = None,
     ) -> dict[str, Any]:
-        proposal = self.get_proposal_by_id(proposal_id)
-        if proposal is None:
-            raise ValueError(f"proposal not found: {proposal_id}")
         self._set_status_and_record(
-            proposal=proposal,
+            proposal_id=proposal_id,
             action="blocked",
-            target_schema_version=proposal.get("schema_version", ""),
             reason=reason,
             report_path=report_path,
         )
-        return self.get_proposal_by_id(proposal_id) or proposal
+        proposal = self.get_proposal_by_id(proposal_id)
+        if proposal is None:
+            raise RuntimeError(f"blocked proposal disappeared: {proposal_id}")
+        return proposal
 
     def get_promotions(self, limit: int = 20) -> list[dict[str, Any]]:
         conn = self._connect()
@@ -339,12 +546,65 @@ class SchemaCandidateStore:
         finally:
             conn.close()
 
+    def get_active_schema(self) -> dict[str, Any]:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT v.version_id, v.parent_version_id, v.types_json,
+                       v.predicates_json, v.attributes_json,
+                       v.activated_by_proposal_id, v.created_at
+                FROM schema_metadata m
+                JOIN schema_versions v ON v.version_id = m.value
+                WHERE m.key = 'active_schema_version'
+                """
+            ).fetchone()
+            if row is None:
+                return {
+                    "version_id": BASE_SCHEMA_VERSION,
+                    "types": sorted(BASE_TYPES),
+                    "predicates": sorted(BASE_PREDICATES),
+                    "attributes": sorted(BASE_ATTRIBUTES),
+                }
+            return {
+                "version_id": row[0],
+                "parent_version_id": row[1],
+                "types": json.loads(row[2]),
+                "predicates": json.loads(row[3]),
+                "attributes": json.loads(row[4]),
+                "activated_by_proposal_id": row[5],
+                "created_at": row[6],
+            }
+        finally:
+            conn.close()
+
+    def activate_schema_version(self, version_id: str) -> dict[str, Any]:
+        conn = self._connect()
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM schema_versions WHERE version_id = ?",
+                (version_id,),
+            ).fetchone()
+            if not exists:
+                raise ValueError(f"schema version not found: {version_id}")
+            conn.execute(
+                """
+                INSERT INTO schema_metadata(key, value)
+                VALUES ('active_schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (version_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_active_schema()
+
     def _set_status_and_record(
         self,
         *,
-        proposal: dict[str, Any],
+        proposal_id: str,
         action: str,
-        target_schema_version: str,
         reason: str,
         report_path: str | None,
     ) -> None:
@@ -352,23 +612,104 @@ class SchemaCandidateStore:
         status = "promoted" if action == "promoted" else "blocked"
         conn = self._connect()
         try:
-            conn.execute(
-                "UPDATE schema_proposals SET status = ?, updated_at = ? WHERE proposal_id = ?",
-                (status, now, proposal["proposal_id"]),
+            conn.execute("BEGIN IMMEDIATE")
+            proposal = conn.execute(
+                """
+                SELECT proposal_type, name, schema_version, status
+                FROM schema_proposals
+                WHERE proposal_id = ?
+                """,
+                (proposal_id,),
+            ).fetchone()
+            if proposal is None:
+                raise ValueError(f"proposal not found: {proposal_id}")
+            if proposal[3] != "candidate":
+                raise ValueError(
+                    f"proposal is not a candidate: {proposal_id} ({proposal[3]})"
+                )
+
+            updated = conn.execute(
+                """
+                UPDATE schema_proposals
+                SET status = ?, updated_at = ?
+                WHERE proposal_id = ? AND status = 'candidate'
+                """,
+                (status, now, proposal_id),
             )
+            if updated.rowcount != 1:
+                raise RuntimeError(
+                    f"proposal terminal transition lost race: {proposal_id}"
+                )
             conn.execute(
                 "INSERT INTO schema_promotions (proposal_id, proposal_type, name, action, from_schema_version, target_schema_version, reason, report_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    proposal["proposal_id"],
-                    proposal.get("proposal_type", ""),
-                    proposal.get("name", ""),
+                    proposal_id,
+                    proposal[0],
+                    proposal[1],
                     status,
-                    proposal.get("schema_version", ""),
-                    target_schema_version,
+                    proposal[2],
+                    proposal[2],
                     reason,
                     report_path,
                     now,
                 ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _activate_promotion(
+        self,
+        proposal: dict[str, Any],
+        target_schema_version: str,
+    ) -> None:
+        active = self.get_active_schema()
+        if target_schema_version == active.get("version_id"):
+            raise ValueError(
+                f"target schema version is already active: {target_schema_version}"
+            )
+        types = set(active.get("types", []))
+        predicates = set(active.get("predicates", []))
+        attributes = set(active.get("attributes", []))
+        proposal_type = proposal.get("proposal_type")
+        name = str(proposal.get("name", "")).strip()
+        if proposal_type == "new_type":
+            types.add(name)
+        elif proposal_type == "new_relation":
+            predicates.add(name)
+        elif proposal_type == "new_attribute":
+            attributes.add(name)
+
+        now = datetime.now(UTC).isoformat()
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO schema_versions
+                (version_id, parent_version_id, types_json, predicates_json,
+                 attributes_json, activated_by_proposal_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_schema_version,
+                    active.get("version_id"),
+                    json.dumps(sorted(types), ensure_ascii=False),
+                    json.dumps(sorted(predicates), ensure_ascii=False),
+                    json.dumps(sorted(attributes), ensure_ascii=False),
+                    proposal.get("proposal_id"),
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO schema_metadata(key, value)
+                VALUES ('active_schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (target_schema_version,),
             )
             conn.commit()
         finally:
@@ -383,7 +724,7 @@ class SchemaCandidateStore:
         conn = self._connect()
         try:
             rows = conn.execute(
-                f"SELECT proposal_id, proposal_type, name, description, supporting_texts, evidence_spans, occurrence_count, independent_document_count, relation_pattern_consistency, evidence_coverage, source_run_ids, schema_version, status, created_at, updated_at FROM schema_proposals WHERE {where_clause} ORDER BY occurrence_count DESC, updated_at DESC LIMIT ?",
+                f"SELECT proposal_id, proposal_type, name, description, supporting_texts, evidence_spans, occurrence_count, independent_document_count, relation_pattern_consistency, evidence_coverage, source_run_ids, source_document_ids, schema_version, status, created_at, updated_at FROM schema_proposals WHERE {where_clause} ORDER BY occurrence_count DESC, updated_at DESC LIMIT ?",
                 (*params, limit),
             ).fetchall()
             return [
@@ -399,10 +740,11 @@ class SchemaCandidateStore:
                     "relation_pattern_consistency": r[8],
                     "evidence_coverage": r[9],
                     "source_run_ids": json.loads(r[10]) if r[10] else [],
-                    "schema_version": r[11],
-                    "status": r[12],
-                    "created_at": r[13],
-                    "updated_at": r[14],
+                    "source_document_ids": json.loads(r[11]) if r[11] else [],
+                    "schema_version": r[12],
+                    "status": r[13],
+                    "created_at": r[14],
+                    "updated_at": r[15],
                 }
                 for r in rows
             ]

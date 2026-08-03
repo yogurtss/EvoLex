@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0",
+  "description": "Deterministic engineering regression corpus for the EvoLex joint entity-relation extraction and graph-evolution pipeline.",
+  "limitations": [
+    "This is a small project-owned regression corpus, not an external benchmark.",
+    "The examples are designed to exercise relation endpoint preservation, predicate extraction, alias consolidation, evidence contracts, and evolution gates.",
+    "Results must not be represented as state-of-the-art performance or generalized to arbitrary domains."
+  ],
+  "documents": [
+    {
+      "id": "joint-001",
+      "text": "API Gateway retries HTTP errors.",
+      "entities": ["API Gateway", "HTTP"],
+      "relations": [["API Gateway", "retries", "HTTP"]],
+      "alias_groups": {
+        "api-gateway": ["API Gateway", "API GW"]
+      }
+    },
+    {
+      "id": "joint-002",
+      "text": "API GW depends on Retry Policy.",
+      "entities": ["API GW", "Retry Policy"],
+      "relations": [["API GW", "depends_on", "Retry Policy"]],
+      "alias_groups": {
+        "api-gateway": ["API Gateway", "API GW"]
+      }
+    },
+    {
+      "id": "joint-003",
+      "text": "Knowledge Graph uses Entity Resolver.",
+      "entities": ["Knowledge Graph", "Entity Resolver"],
+      "relations": [["Knowledge Graph", "uses", "Entity Resolver"]]
+    },
+    {
+      "id": "joint-004",
+      "text": "Graph Store requires SQLite Database.",
+      "entities": ["Graph Store", "SQLite Database"],
+      "relations": [["Graph Store", "depends_on", "SQLite Database"]]
+    },
+    {
+      "id": "joint-005",
+      "text": "Policy Agent includes Risk Gate.",
+      "entities": ["Policy Agent", "Risk Gate"],
+      "relations": [["Policy Agent", "includes", "Risk Gate"]]
+    },
+    {
+      "id": "joint-006",
+      "text": "Extraction Agent achieves Evidence Coverage.",
+      "entities": ["Extraction Agent", "Evidence Coverage"],
+      "relations": [["Extraction Agent", "achieves", "Evidence Coverage"]]
+    },
+    {
+      "id": "joint-007",
+      "text": "Schema Registry is part of Governance Layer.",
+      "entities": ["Schema Registry", "Governance Layer"],
+      "relations": [["Schema Registry", "part_of", "Governance Layer"]]
+    },
+    {
+      "id": "joint-008",
+      "text": "Model Router affects Latency Budget.",
+      "entities": ["Model Router", "Latency Budget"],
+      "relations": [["Model Router", "affects", "Latency Budget"]]
+    }
+  ]
+}

@@ -1,0 +1,241 @@
+{
+  "stage": 3,
+  "evidence_ledger": [
+    {
+      "id": "L001",
+      "feature": "同一抽取批次同时产生实体提及、以批次内提及标识作为端点的关系候选和证据片段，并对跨片段标识命名空间化",
+      "source_ids": [
+        "C001",
+        "C002",
+        "C005"
+      ],
+      "source_location": "联合抽取接口、_namespace_typed_batch、_materialize_joint_relations",
+      "technical_role": "使关系端点与提及身份共享可校验标识空间",
+      "effect": "减少分步抽取导致的端点身份丢失并记录端点失败",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L002",
+      "feature": "先过滤缺少证据标识、来源文档标识或证据文本的证据，再校验主张与关系候选的证据引用并输出失败记录",
+      "source_ids": [
+        "C003",
+        "C020"
+      ],
+      "source_location": "validate_node及无效关系证据引用测试",
+      "technical_role": "阻断悬空证据引用进入端点物化和图补丁",
+      "effect": "提高证据引用完整性",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L003",
+      "feature": "仅在同类型、来源提及完整且两个待合并簇的任意跨簇成员对均达到等价阈值时自动合并实体",
+      "source_ids": [
+        "C004",
+        "C017"
+      ],
+      "source_location": "entity_merge_node及complete-link攻击测试",
+      "technical_role": "形成受类型和来源约束的规范实体身份假设",
+      "effect": "减少别名重复并限制传递性过度合并",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L004",
+      "feature": "以规范端点、规范谓词和限定信息摘要形成关系身份，聚合重复关系并保留逐条源断言快照",
+      "source_ids": [
+        "C006",
+        "C017",
+        "E001",
+        "E002"
+      ],
+      "source_location": "relation_merge_node、_qualifier_hash及限定信息隔离测试",
+      "technical_role": "区分同一三元组在不同限定条件下的断言并支持源断言重建",
+      "effect": "降低限定关系误合并并保留关系谱系",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L005",
+      "feature": "把规范图对象转换为具有操作标识、对象后态、与对象类型相适配的来源锚、声明影响对象及关系端点依赖的候选图补丁",
+      "source_ids": [
+        "C007"
+      ],
+      "source_location": "_build_patch",
+      "technical_role": "把知识候选转换为可独立验证和排除的操作单元",
+      "effect": "为提交前影响分析提供机器输入",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L006",
+      "feature": "由来源锚、声明影响对象、关系端点依赖及基线一跳邻接派生并冻结原始影响域摘要",
+      "source_ids": [
+        "C008",
+        "C020"
+      ],
+      "source_location": "_derive_impact_domain、_evaluate_patch及冻结域测试",
+      "technical_role": "为全部反事实重放和排除集合求解固定验证边界",
+      "effect": "避免候选删减过程中验证边界随之缩小",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L007",
+      "feature": "在固定基线影子图执行候选补丁，输出带操作关联和影响域摘要的结构查询、重放摘要及域外投影摘要",
+      "source_ids": [
+        "C009"
+      ],
+      "source_location": "_apply_shadow、_unaffected_projection、_query",
+      "technical_role": "在正式图提交前形成可重放的失败记录和边界检查结果",
+      "effect": "降低不合格补丁直接污染规范图的风险",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L008",
+      "feature": "对失败查询的每个关联操作执行依赖闭包排除和同基线反事实重放，仅将使目标失败消失的操作确定为反事实原因操作",
+      "source_ids": [
+        "C010",
+        "C019",
+        "C020"
+      ],
+      "source_location": "_verify_failed_query_attributions及篡改测试",
+      "technical_role": "把静态操作关联收紧为可执行的反事实原因验证",
+      "effect": "缩小排除候选空间并提供原因检查记录",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L009",
+      "feature": "在关系端点依赖闭合和冻结影响域约束下选择待排除更新操作集合；小候选空间精确枚举，大候选空间输出固定点单删除局部最小且非全局的标记结果",
+      "source_ids": [
+        "C010",
+        "C020",
+        "E003"
+      ],
+      "source_location": "_minimum_cost_compensation及十七候选回归测试",
+      "technical_role": "在满足结构约束时保留剩余子补丁并如实标记求解性质",
+      "effect": "减少整补丁回退造成的有效知识损失",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L010",
+      "feature": "生成内容寻址因果验证凭证，绑定基线、候选操作、冻结影响域、查询原因、求解结果、排除与接受操作、最终影子摘要及门结果",
+      "source_ids": [
+        "C019",
+        "C020",
+        "E005"
+      ],
+      "source_location": "_build_validation_certificate及多字段篡改测试",
+      "technical_role": "使验证依据与剩余子补丁形成可重算的一致性清单",
+      "effect": "检测验证结果、选择结果或基线被替换",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L011",
+      "feature": "共识和提交节点重算凭证，并要求判定、评估和凭证中的接受操作标识一致；存储层再核对提交清单摘要",
+      "source_ids": [
+        "C011",
+        "C012",
+        "C019",
+        "C020",
+        "E006"
+      ],
+      "source_location": "_decision_matches_certificate、commit_patch及同补丁不同选择测试",
+      "technical_role": "把实际写入事件集合绑定到验证凭证和幂等重试",
+      "effect": "阻止选择篡改或旧版本误作为本次提交返回",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L012",
+      "feature": "规范图存储在单库事务中校验父版本和提交清单，写入剩余操作、图事件、图版本及活动版本指针",
+      "source_ids": [
+        "C012"
+      ],
+      "source_location": "CanonicalGraphStore.commit_patch",
+      "technical_role": "建立具有父版本拒绝和清单幂等语义的提交边界",
+      "effect": "避免陈旧或错配子补丁静默写入",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L013",
+      "feature": "通过版本贡献和删除墓碑创建追加式历史补偿版本，在后续依赖不允许安全移除时记录跳过操作",
+      "source_ids": [
+        "C013",
+        "C017"
+      ],
+      "source_location": "rollback_version、_safe_to_compensate及交错生命周期测试",
+      "technical_role": "按贡献重算当前对象而不删除历史版本",
+      "effect": "保留后续贡献、后续删除和新生命周期",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L014",
+      "feature": "一次运行固定schema版本，schema提议使用内容稳定标识累积，并在事务锁内重读活动版本后晋升",
+      "source_ids": [
+        "C014",
+        "C017"
+      ],
+      "source_location": "schema_store及并发晋升测试",
+      "technical_role": "分离当前运行配置与后续schema变更",
+      "effect": "提高运行可复现性并避免并发丢更新",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L015",
+      "feature": "技术判定模块按依赖图执行且上游修订使下游结果失效",
+      "source_ids": [
+        "C015",
+        "C017"
+      ],
+      "source_location": "AgenticKGRunner及工具依赖失效测试",
+      "technical_role": "防止陈旧下游结果用于提交",
+      "effect": "保持控制链阶段一致性",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L016",
+      "feature": "生成展示当前活动规范图的全局页面，以及按来源文档内容快照投影且不扩张其他文档关系证据的逐文档页面",
+      "source_ids": [
+        "C016"
+      ],
+      "source_location": "build_dashboard、build_dashboard_bundle、snapshot_for_document及可视化隔离测试",
+      "technical_role": "提供实施例中的人工审计入口；不承担正式权利要求创造性",
+      "effect": "在不部署前后端服务的条件下缩短全局审计和逐来源诊断路径",
+      "support_status": "explicit"
+    },
+    {
+      "id": "L017",
+      "feature": "由处理器执行程序以实现候选图补丁验证、局部排除、凭证核对和版本提交",
+      "source_ids": [
+        "C007",
+        "C008",
+        "C009",
+        "C010",
+        "C012",
+        "C019",
+        "C020"
+      ],
+      "source_location": "可执行源码、命令行入口和自动化测试",
+      "technical_role": "支持系统、设备和存储介质类别",
+      "effect": "在通用计算设备上实现所述数据完整性控制链",
+      "support_status": "inherent"
+    }
+  ],
+  "excluded_unsupported_features": [
+    "任意delete补丁通过相同自动影子规划",
+    "任意规模待排除集合求解全局最小或一般集合包含极小",
+    "规范图和运行发布库跨库原子",
+    "任意业务查询语义等价",
+    "因果验证凭证提供身份认证、对抗性防篡改或知识真实性证明",
+    "自动在线更新模型权重",
+    "所有误合并对象自动拆分"
+  ],
+  "inventor_questions": [
+    "[TO CONFIRM: 发明人姓名、各发明人的实质贡献及顺序是什么？]",
+    "[TO CONFIRM: 申请人名称、权属依据以及是否存在雇佣或合作开发协议？]",
+    "[TO CONFIRM: 最早的论文、演示、代码仓库、客户交付或其他公开日期是什么？]",
+    "[TO CONFIRM: 是否已经向境外主体披露，是否需要保密审查、优先权或PCT布局？]",
+    "[TO CONFIRM: 正式提交前是否取得公开语料上的同模型分步/联合消融结果？]",
+    "[TO CONFIRM: 是否补充影响域相对全图验证的读取量/耗时、局部排除相对整补丁拒绝的知识保留率及凭证篡改检出率实验？]",
+    "[TO CONFIRM: 是否把版本存储子方案作为分案，或保留在本案从属权利要求？]"
+  ],
+  "gate": {
+    "essential_features_unsupported": 0,
+    "status": "passed"
+  }
+}

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from evolex.agentic.metrics import publish_gate
 from evolex.graph.state import GraphState
 from evolex.repositories.kg_store import KGStore
 
@@ -21,12 +22,30 @@ def make_publish_node(output_dir: Path | None = None):
                 "status": state.get("status", "candidate"),
             }
 
+        if not _publication_authorized(state):
+            warnings = list(state.get("warnings", []))
+            warnings.append(
+                "run-level publication blocked because governance prerequisites "
+                "were not completed"
+            )
+            return {
+                "publish_output_path": "",
+                "status": (
+                    state.get("status")
+                    if state.get("status") in {"quarantined", "rejected", "failed"}
+                    else "candidate"
+                ),
+                "warnings": warnings,
+            }
+
         kg_dir.mkdir(parents=True, exist_ok=True)
         db_path = kg_dir / f"{state['run_id']}.sqlite"
         created_at = datetime.now(UTC).isoformat()
 
         store = KGStore(db_path)
         try:
+            store.begin()
+            store.clear_published_snapshot(str(state["run_id"]))
             entities = state.get("entities", [])
             relations = state.get("relations", [])
             quality_scores = state.get("quality_scores", [])
@@ -77,6 +96,9 @@ def make_publish_node(output_dir: Path | None = None):
                 )
 
             store.commit()
+        except Exception:
+            store.rollback()
+            raise
         finally:
             store.close()
 
@@ -86,3 +108,26 @@ def make_publish_node(output_dir: Path | None = None):
         }
 
     return publish_node
+
+
+def _publication_authorized(state: GraphState) -> bool:
+    """Defence-in-depth authorization for the side-effecting publish node."""
+    pipeline_mode = str(state.get("pipeline_mode", ""))
+    decisions = state.get("policy_decisions", [])
+    if pipeline_mode == "phase1+2":
+        return state.get("status") not in {"failed", "quarantined", "rejected"}
+    if decisions and decisions[0].get("action") != "publish":
+        return False
+    if pipeline_mode == "agent":
+        gate_passed, _, _ = publish_gate(state)
+        return (
+            bool(decisions)
+            and bool(state.get("evolution_decision", {}).get("accepted"))
+            and state.get("evolution_commit", {}).get("status") == "committed"
+            and gate_passed
+        )
+    return bool(decisions) and state.get("status") not in {
+        "failed",
+        "quarantined",
+        "rejected",
+    }

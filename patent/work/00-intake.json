@@ -1,0 +1,33 @@
+{
+  "stage": 0,
+  "source_files": [
+    "src/evolex/",
+    "tests/",
+    "docs/",
+    "benchmarks/patent_joint_kg_corpus.json"
+  ],
+  "requested_deliverables": [
+    "完整可运行项目",
+    "联合实体关系抽取",
+    "实体和关系合并Agent",
+    "知识图谱受控自进化",
+    "可视化",
+    "中国发明专利审阅草案及配套文档"
+  ],
+  "target_jurisdiction": "中国",
+  "publication_status": "[TO CONFIRM: 项目是否已经公开及最早公开日期]",
+  "known_disclosure_dates": [],
+  "inventorship": "[TO CONFIRM: 发明人及贡献]",
+  "ownership": "[TO CONFIRM: 申请人及权属依据]",
+  "risk_flags": [
+    "A1是公开文本种类代码，不是质量或授权等级。",
+    "最接近专利和family/claim chart仍需代理师正式检索。",
+    "项目自有八条回归语料不证明开放域泛化或学术SOTA。",
+    "申请前需冻结源码提交并确认全部公开披露。"
+  ],
+  "gate": {
+    "all_inputs_identified": true,
+    "unknown_facts_explicit": true,
+    "status": "passed-with-inventor-questions"
+  }
+}

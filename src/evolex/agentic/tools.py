@@ -9,7 +9,14 @@ from evolex.agents.deepseek_client import BaseExtractor
 from evolex.graph.state import GraphState
 from evolex.nodes.candidate_store import make_candidate_store_node
 from evolex.nodes.critic import critic_node
+from evolex.nodes.entity_merge import entity_merge_node
 from evolex.nodes.entity_resolve import entity_resolve_node
+from evolex.nodes.evolution import (
+    evolution_consensus_node,
+    evolution_shadow_node,
+    make_evolution_commit_node,
+    make_evolution_plan_node,
+)
 from evolex.nodes.extract import make_extract_node
 from evolex.nodes.ingest import ingest_node
 from evolex.nodes.policy_node import policy_node
@@ -17,8 +24,9 @@ from evolex.nodes.profile import profile_node
 from evolex.nodes.publish import make_publish_node
 from evolex.nodes.quality_review import make_quality_review_node
 from evolex.nodes.relation_extract import make_relation_extract_node
+from evolex.nodes.relation_merge import relation_merge_node
 from evolex.nodes.registry_finalize import make_registry_finalize_node
-from evolex.nodes.schema_gap import schema_gap_node
+from evolex.nodes.schema_gap import make_schema_gap_node
 from evolex.nodes.schema_proposer import schema_proposer_node
 from evolex.nodes.segment import segment_node
 from evolex.nodes.validate import validate_node
@@ -41,6 +49,7 @@ def build_agent_tools(
     extractor: BaseExtractor,
     output_dir: Path | None,
 ) -> dict[str, AgentTool]:
+    schema_dir = (output_dir / "schema_candidates") if output_dir else None
     return {
         "ingest_tool": AgentTool("ingest_tool", "ingest", ingest_node, cost=0.2),
         "profile_tool": AgentTool("profile_tool", "profile", profile_node, cost=0.2),
@@ -59,13 +68,54 @@ def build_agent_tools(
             entity_resolve_node,
             cost=0.7,
         ),
+        "entity_merge_tool": AgentTool(
+            "entity_merge_tool",
+            "entity_merge",
+            entity_merge_node,
+            cost=0.5,
+        ),
         "relation_extract_tool": AgentTool(
             "relation_extract_tool",
             "relation_extract",
             make_relation_extract_node(extractor),
             cost=1.0,
         ),
-        "schema_gap_tool": AgentTool("schema_gap_tool", "schema_gap", schema_gap_node, cost=0.5),
+        "relation_merge_tool": AgentTool(
+            "relation_merge_tool",
+            "relation_merge",
+            relation_merge_node,
+            cost=0.5,
+        ),
+        "evolution_plan_tool": AgentTool(
+            "evolution_plan_tool",
+            "evolution_plan",
+            make_evolution_plan_node(output_dir),
+            cost=0.7,
+        ),
+        "evolution_shadow_tool": AgentTool(
+            "evolution_shadow_tool",
+            "evolution_shadow",
+            evolution_shadow_node,
+            cost=0.8,
+        ),
+        "evolution_consensus_tool": AgentTool(
+            "evolution_consensus_tool",
+            "evolution_consensus",
+            evolution_consensus_node,
+            cost=0.5,
+        ),
+        "evolution_commit_tool": AgentTool(
+            "evolution_commit_tool",
+            "evolution_commit",
+            make_evolution_commit_node(output_dir),
+            cost=0.8,
+        ),
+        "schema_gap_tool": AgentTool(
+            "schema_gap_tool",
+            "schema_gap",
+            make_schema_gap_node(schema_dir),
+            cost=0.5,
+        ),
         "schema_proposer_tool": AgentTool(
             "schema_proposer_tool",
             "schema_proposer",

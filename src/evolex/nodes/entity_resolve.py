@@ -52,7 +52,10 @@ def entity_resolve_node(state: GraphState) -> dict:
     if state.get("mentions"):
         mentions = deepcopy(state["mentions"])
     elif state.get("semantic_atoms"):
-        mentions = [_atom_to_mention(a) for a in state["semantic_atoms"]]
+        mentions = [
+            _atom_to_mention(atom, atom_index)
+            for atom_index, atom in enumerate(state["semantic_atoms"])
+        ]
     else:
         return {"entities": [], "entity_decisions": []}
 
@@ -62,7 +65,7 @@ def entity_resolve_node(state: GraphState) -> dict:
 
     # --- resolution pass ---
     entity_decisions: list[dict] = []
-    seen_normalised: dict[str, int] = {}  # norm_text -> first decision index
+    seen_normalised: dict[tuple[str, str], int] = {}
     entities: list[dict] = []
     next_entity_num = 1
 
@@ -70,13 +73,17 @@ def entity_resolve_node(state: GraphState) -> dict:
         text = mention.get("text", "")
         norm_text = mention.get("normalized_text", _normalize_entity_text(text))
         mention_type = mention.get("mention_type", mention.get("type", "entity"))
+        mention_id = str(mention.get("mention_id", f"legacy:{idx}"))
         segment_id = mention.get("segment_id", "")
         confidence = float(mention.get("confidence", 0.5))
+        source_atom_index = mention.get("source_atom_index")
+        identity_key = (str(mention_type), norm_text)
 
         # --- REJECT: trivial or empty ---
         if len(norm_text.strip()) < 2 or confidence < 0.3:
             entity_decisions.append({
                 "mention_text": text,
+                "mention_id": mention_id,
                 "mention_type": mention_type,
                 "normalized_text": norm_text,
                 "decision": "REJECT",
@@ -89,11 +96,12 @@ def entity_resolve_node(state: GraphState) -> dict:
             continue
 
         # --- LINK: already seen this normalised form ---
-        if norm_text in seen_normalised:
-            target_idx = seen_normalised[norm_text]
+        if identity_key in seen_normalised:
+            target_idx = seen_normalised[identity_key]
             target_entity_id = entities[target_idx]["entity_id"]
             entity_decisions.append({
                 "mention_text": text,
+                "mention_id": mention_id,
                 "mention_type": mention_type,
                 "normalized_text": norm_text,
                 "decision": "LINK",
@@ -105,21 +113,31 @@ def entity_resolve_node(state: GraphState) -> dict:
             })
             # Update the target entity
             entities[target_idx]["merged_count"] += 1
+            if mention_id not in entities[target_idx]["source_mention_ids"]:
+                entities[target_idx]["source_mention_ids"].append(mention_id)
+            if text and text not in entities[target_idx]["aliases"]:
+                entities[target_idx]["aliases"].append(text)
             if segment_id and segment_id not in entities[target_idx]["segment_ids"]:
                 entities[target_idx]["segment_ids"].append(segment_id)
                 entities[target_idx]["source_mention_indices"].append(idx)
+            if (
+                isinstance(source_atom_index, int)
+                and source_atom_index not in entities[target_idx]["source_atom_indices"]
+            ):
+                entities[target_idx]["source_atom_indices"].append(source_atom_index)
             continue
 
         # --- AMBIGUOUS: check for substring collisions ---
         collision = None
-        for existing_norm, ent_idx in seen_normalised.items():
-            if _is_ambiguous_collision(norm_text, existing_norm):
+        for (existing_type, existing_norm), ent_idx in seen_normalised.items():
+            if existing_type == mention_type and _is_ambiguous_collision(norm_text, existing_norm):
                 collision = ent_idx
                 break
 
         if collision is not None:
             entity_decisions.append({
                 "mention_text": text,
+                "mention_id": mention_id,
                 "mention_type": mention_type,
                 "normalized_text": norm_text,
                 "decision": "AMBIGUOUS",
@@ -135,9 +153,10 @@ def entity_resolve_node(state: GraphState) -> dict:
         entity_id = f"ent-{next_entity_num:04d}"
         next_entity_num += 1
 
-        seen_normalised[norm_text] = len(entities)
+        seen_normalised[identity_key] = len(entities)
         entity_decisions.append({
             "mention_text": text,
+            "mention_id": mention_id,
             "mention_type": mention_type,
             "normalized_text": norm_text,
             "decision": "CREATE_CANDIDATE",
@@ -152,7 +171,11 @@ def entity_resolve_node(state: GraphState) -> dict:
             "canonical_text": text,
             "type": mention_type,
             "source_mention_indices": [idx],
-            "source_atom_indices": [idx],
+            "source_mention_ids": [mention_id],
+            "source_atom_indices": (
+                [source_atom_index] if isinstance(source_atom_index, int) else []
+            ),
+            "aliases": [text],
             "merged_count": 1,
             "segment_ids": [segment_id] if segment_id else [],
             "confidence": confidence,
@@ -161,40 +184,48 @@ def entity_resolve_node(state: GraphState) -> dict:
             "run_id": run_id,
         })
 
+    mention_entity_map = {
+        str(item.get("mention_id", "")): str(item.get("target_entity_id", ""))
+        for item in entity_decisions
+        if item.get("decision") in {"LINK", "CREATE_CANDIDATE"}
+        and item.get("mention_id")
+        and item.get("target_entity_id")
+    }
     return {
         "entities": entities,
         "entity_decisions": entity_decisions,
+        "mention_entity_map": mention_entity_map,
     }
 
 
 # -- helpers ------------------------------------------------------------------
 
 
-def _atom_to_mention(atom: dict) -> dict:
+def _atom_to_mention(atom: dict, atom_index: int) -> dict:
     return {
+        "mention_id": f"legacy:{atom_index}",
         "text": atom.get("text", ""),
         "normalized_text": atom.get("text", ""),
         "mention_type": atom.get("type", "entity"),
         "segment_id": atom.get("segment_id", ""),
         "evidence": atom.get("evidence", ""),
         "confidence": atom.get("confidence", 0.5),
+        "source_atom_index": atom_index,
     }
 
 
 def _normalize_entity_text(text: str) -> str:
-    """Normalise entity text for deduplication: alias, lowercase, collapse."""
-    normalized = text.strip().lower()
+    """Normalise surface form without making semantic merge decisions."""
+    normalized = text.strip().casefold()
     # Remove leading articles
     for prefix in ("a ", "an ", "the "):
         if normalized.startswith(prefix):
             normalized = normalized[len(prefix) :]
-    # Apply alias map
-    words = normalized.split()
-    words = [ALIAS_MAP.get(w, w) for w in words]
-    normalized = " ".join(words)
     # Collapse whitespace
     normalized = re.sub(r"\s+", " ", normalized).strip()
-    return normalized
+    normalized = ALIAS_MAP.get(normalized, normalized)
+    normalized = UNIT_SYNONYM_TABLE.get(normalized, normalized)
+    return normalized.casefold()
 
 
 def _is_ambiguous_collision(a: str, b: str) -> bool:

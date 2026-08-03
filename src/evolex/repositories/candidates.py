@@ -81,13 +81,172 @@ class CandidateRegistry:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS merge_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                object_type TEXT NOT NULL,
+                decision_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_trace (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                step_index INTEGER,
+                trace_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_candidates_run ON candidates(run_id);
             CREATE INDEX IF NOT EXISTS idx_quarantine_run ON quarantine_records(run_id);
             CREATE INDEX IF NOT EXISTS idx_audit_run ON audit_events(run_id);
+            CREATE INDEX IF NOT EXISTS idx_merge_run ON merge_decisions(run_id);
+            CREATE INDEX IF NOT EXISTS idx_agent_trace_run ON agent_trace(run_id);
             """
         )
 
     # -- writers ----------------------------------------------------------------
+
+    def replace_run_snapshot(
+        self,
+        run_id: str,
+        *,
+        entity_decisions: list[dict],
+        policy_decisions: list[dict],
+        audit_events: list[dict],
+        merge_decisions: list[dict],
+        agent_trace: list[dict],
+        candidates: list[tuple[str, dict]],
+        quarantine_record: dict | None,
+    ) -> None:
+        """Atomically replace a run's registry projection.
+
+        Registry finalization is a materialized projection of the checkpoint
+        state.  Replacing it in one transaction makes a retry after a
+        checkpoint-write failure idempotent instead of duplicating every row.
+        """
+        conn = self._connect(run_id)
+        created_at = datetime.now(UTC).isoformat()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            for table in (
+                "candidates",
+                "entity_decisions",
+                "policy_decisions",
+                "quarantine_records",
+                "audit_events",
+                "merge_decisions",
+                "agent_trace",
+            ):
+                conn.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))
+
+            conn.executemany(
+                "INSERT INTO entity_decisions "
+                "(run_id, decision_json, created_at) VALUES (?, ?, ?)",
+                [
+                    (
+                        run_id,
+                        json.dumps(item, ensure_ascii=False),
+                        created_at,
+                    )
+                    for item in entity_decisions
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO policy_decisions "
+                "(run_id, decision_json, created_at) VALUES (?, ?, ?)",
+                [
+                    (
+                        run_id,
+                        json.dumps(item, ensure_ascii=False),
+                        created_at,
+                    )
+                    for item in policy_decisions
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO audit_events "
+                "(run_id, node_name, status_before, status_after, decision, "
+                "warnings, elapsed_seconds, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        run_id,
+                        item.get("node_name", ""),
+                        item.get("status_before"),
+                        item.get("status_after"),
+                        item.get("decision"),
+                        item.get("warnings", ""),
+                        item.get("elapsed_seconds"),
+                        created_at,
+                    )
+                    for item in audit_events
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO merge_decisions "
+                "(run_id, object_type, decision_json, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        run_id,
+                        item.get("object_type", "unknown"),
+                        json.dumps(item, ensure_ascii=False),
+                        created_at,
+                    )
+                    for item in merge_decisions
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO agent_trace "
+                "(run_id, step_index, trace_json, created_at) VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        run_id,
+                        item.get("step_index"),
+                        json.dumps(item, ensure_ascii=False),
+                        created_at,
+                    )
+                    for item in agent_trace
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO candidates "
+                "(run_id, object_type, object_json, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        run_id,
+                        object_type,
+                        json.dumps(value, ensure_ascii=False),
+                        created_at,
+                    )
+                    for object_type, value in candidates
+                ],
+            )
+            if quarantine_record is not None:
+                conn.execute(
+                    "INSERT INTO quarantine_records "
+                    "(run_id, object_type, object_id, reason, risk_level, "
+                    "evidence, suggested_action, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        run_id,
+                        quarantine_record.get("object_type", "unknown"),
+                        quarantine_record.get("object_id"),
+                        quarantine_record.get("reason", ""),
+                        quarantine_record.get("risk_level", "medium"),
+                        quarantine_record.get("evidence", ""),
+                        quarantine_record.get("suggested_action", ""),
+                        created_at,
+                    ),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def put_candidate(self, run_id: str, object_type: str, obj: dict) -> None:
         conn = self._connect(run_id)
@@ -155,6 +314,38 @@ class CandidateRegistry:
                     event.get("decision"),
                     event.get("warnings", ""),
                     event.get("elapsed_seconds"),
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def put_merge_decision(self, run_id: str, decision: dict) -> None:
+        conn = self._connect(run_id)
+        try:
+            conn.execute(
+                "INSERT INTO merge_decisions (run_id, object_type, decision_json, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    run_id,
+                    decision.get("object_type", "unknown"),
+                    json.dumps(decision, ensure_ascii=False),
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def put_agent_trace(self, run_id: str, trace: dict) -> None:
+        conn = self._connect(run_id)
+        try:
+            conn.execute(
+                "INSERT INTO agent_trace (run_id, step_index, trace_json, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    run_id,
+                    trace.get("step_index"),
+                    json.dumps(trace, ensure_ascii=False),
                     datetime.now(UTC).isoformat(),
                 ),
             )

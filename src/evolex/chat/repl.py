@@ -3,10 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
+from typing import TYPE_CHECKING
 
 from evolex.agents.deepseek_client import LLMConfig
 from evolex.chat.controller import ChatController
 from evolex.graph.runner import PipelineAlias
+
+if TYPE_CHECKING:
+    from rich.live import Live
 
 COMPLETION_COMMANDS = (
     "help",

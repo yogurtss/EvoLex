@@ -10,21 +10,27 @@ from evolex.agents.deepseek_client import DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LLM
 from evolex.chat.repl import run_repl
 from evolex.config import load_config
 from evolex.graph.runner import (
+    is_agentic_pipeline,
     normalize_pipeline,
     replay_run,
     resume_thread,
     run_frozen_evaluation,
     run_shadow_evaluation,
 )
+from evolex.evaluation import run_patent_benchmark
 from evolex.repositories.schema_store import SchemaCandidateStore
+from evolex.repositories.canonical import CanonicalGraphStore
+from evolex.visualization import build_dashboard, build_dashboard_bundle
 
 app = typer.Typer(help="EvoLex technical document knowledge-system CLI.")
 eval_app = typer.Typer(help="Run offline evaluation workflows.")
 run_app = typer.Typer(help="Replay or resume checkpointed runs.")
 schema_app = typer.Typer(help="Inspect and promote schema proposals.")
+evolve_app = typer.Typer(help="Inspect or compensate canonical graph evolution.")
 app.add_typer(eval_app, name="eval")
 app.add_typer(run_app, name="run")
 app.add_typer(schema_app, name="schema")
+app.add_typer(evolve_app, name="evolve")
 
 
 def _complete_pipeline(incomplete: str) -> list[str]:
@@ -43,9 +49,9 @@ def chat(
         help="Directory for Phase 1 candidate JSONL outputs.",
     ),
     pipeline: str = typer.Option(
-        "system",
+        "agent",
         "--pipeline",
-        help="Pipeline mode. Default is the complete system; use agent for information-gain multi-agent control.",
+        help="Pipeline mode. Default is evidence-governed multi-agent control; use system for the deterministic baseline.",
         autocompletion=_complete_pipeline,
     ),
     llm_base_url: Optional[str] = typer.Option(
@@ -78,7 +84,7 @@ def chat(
 ) -> None:
     """Start the EvoLex conversational agent CLI."""
     try:
-        pipeline_mode = normalize_pipeline(pipeline)
+        pipeline_mode = "agent" if is_agentic_pipeline(pipeline) else normalize_pipeline(pipeline)
     except ValueError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1)
@@ -98,6 +104,87 @@ def chat(
 def version() -> None:
     """Print the EvoLex package version."""
     typer.echo(__version__)
+
+
+@app.command()
+def visualize(
+    output: Path = typer.Option(
+        Path("data/visualizations/evolex_dashboard.html"),
+        "--output",
+        help="Self-contained HTML dashboard path.",
+    ),
+    canonical_dir: Optional[Path] = typer.Option(
+        None,
+        "--canonical-dir",
+        help="Directory containing canonical_registry.sqlite.",
+    ),
+    registry_dir: Optional[Path] = typer.Option(
+        None,
+        "--registry-dir",
+        help="Directory containing per-run governance registries.",
+    ),
+    schema_dir: Optional[Path] = typer.Option(
+        None,
+        "--schema-dir",
+        help="Directory containing schema candidates and versions.",
+    ),
+    document_id: Optional[str] = typer.Option(
+        None,
+        "--document-id",
+        help="Optional content-snapshot ID for a document-scoped graph.",
+    ),
+    run_id: Optional[str] = typer.Option(
+        None,
+        "--run-id",
+        help="Optional exact run within the selected document snapshot.",
+    ),
+) -> None:
+    """Export an interactive graph/evolution dashboard as one HTML file."""
+    path = build_dashboard(
+        output_path=output,
+        canonical_dir=canonical_dir,
+        registry_dir=registry_dir,
+        schema_dir=schema_dir,
+        document_id=document_id,
+        run_id=run_id,
+    )
+    typer.echo(f"Dashboard written: {path}")
+
+
+@app.command("visualize-bundle")
+def visualize_bundle(
+    output_dir: Path = typer.Option(
+        Path("data/visualizations/kg_bundle"),
+        "--output-dir",
+        help="Directory for the static index, global KG, and document pages.",
+    ),
+    canonical_dir: Optional[Path] = typer.Option(
+        None,
+        "--canonical-dir",
+        help="Directory containing canonical_registry.sqlite.",
+    ),
+    registry_dir: Optional[Path] = typer.Option(
+        None,
+        "--registry-dir",
+        help="Directory containing per-run governance registries.",
+    ),
+    schema_dir: Optional[Path] = typer.Option(
+        None,
+        "--schema-dir",
+        help="Directory containing schema candidates and versions.",
+    ),
+) -> None:
+    """Export standalone HTML pages for every document and the global KG."""
+    bundle = build_dashboard_bundle(
+        output_dir=output_dir,
+        canonical_dir=canonical_dir,
+        registry_dir=registry_dir,
+        schema_dir=schema_dir,
+    )
+    typer.echo("Knowledge-graph HTML bundle written:")
+    typer.echo(f"  index: {bundle.index_path}")
+    typer.echo(f"  global: {bundle.global_path}")
+    typer.echo(f"  document pages: {len(bundle.document_paths)}")
 
 
 @eval_app.command("frozen")
@@ -144,6 +231,31 @@ def eval_shadow(
     typer.echo(f"  rollback_recommended: {governance.get('rollback_recommended')}")
 
 
+@eval_app.command("patent")
+def eval_patent(
+    output_dir: Optional[Path] = typer.Option(
+        None,
+        "--output-dir",
+        help="Directory for the deterministic patent engineering benchmark.",
+    ),
+    corpus: Optional[Path] = typer.Option(
+        None,
+        "--corpus",
+        help="Optional gold-labelled JSON corpus.",
+    ),
+) -> None:
+    """Compare legacy separate extraction with joint extraction and Agent governance."""
+    result = run_patent_benchmark(output_dir=output_dir, corpus_path=corpus)
+    legacy = result.report["variants"]["legacy_separate"]["metrics"]
+    joint = result.report["variants"]["joint_agent"]["metrics"]
+    typer.echo("Patent engineering benchmark completed:")
+    typer.echo(f"  documents: {result.document_count}")
+    typer.echo(f"  legacy relation_f1: {legacy['relation_f1']:.4f}")
+    typer.echo(f"  joint relation_f1: {joint['relation_f1']:.4f}")
+    typer.echo(f"  JSON: {result.json_path}")
+    typer.echo(f"  Markdown: {result.markdown_path}")
+
+
 @run_app.command("replay")
 def run_replay(
     run_id: str = typer.Option(..., "--run-id", help="Run ID to replay."),
@@ -179,15 +291,16 @@ def run_resume(
         "--checkpoint-dir",
         help="Directory containing checkpoint storage.",
     ),
-    pipeline: str = typer.Option(
-        "system",
+    pipeline: Optional[str] = typer.Option(
+        None,
         "--pipeline",
-        help="Pipeline mode to resume.",
+        help="Pipeline mode to resume. Defaults to the mode stored in the checkpoint.",
     ),
 ) -> None:
     """Resume from the latest checkpoint for a thread."""
     try:
-        normalize_pipeline(pipeline)
+        if pipeline is not None:
+            normalize_pipeline(pipeline)
         result = resume_thread(
             thread_id=thread_id,
             output_dir=output_dir,
@@ -316,6 +429,62 @@ def schema_promotions(
         )
 
 
+@schema_app.command("current")
+def schema_current(
+    schema_dir: Optional[Path] = typer.Option(None, "--schema-dir"),
+) -> None:
+    """Show the active, behavior-driving schema version."""
+    schema = SchemaCandidateStore(schema_dir).get_active_schema()
+    typer.echo(f"version: {schema.get('version_id')}")
+    typer.echo(f"types: {', '.join(schema.get('types', []))}")
+    typer.echo(f"predicates: {', '.join(schema.get('predicates', []))}")
+    typer.echo(f"attributes: {', '.join(schema.get('attributes', []))}")
+
+
+@schema_app.command("activate")
+def schema_activate(
+    version_id: str = typer.Option(..., "--version-id"),
+    schema_dir: Optional[Path] = typer.Option(None, "--schema-dir"),
+) -> None:
+    """Activate an existing schema version, including rollback to a parent."""
+    schema = SchemaCandidateStore(schema_dir).activate_schema_version(version_id)
+    typer.echo(f"Activated schema version: {schema.get('version_id')}")
+
+
+@evolve_app.command("history")
+def evolution_history(
+    canonical_dir: Optional[Path] = typer.Option(None, "--canonical-dir"),
+    limit: int = typer.Option(20, "--limit", min=1),
+) -> None:
+    """List immutable canonical graph versions."""
+    with CanonicalGraphStore(canonical_dir) as store:
+        records = store.history(limit=limit)
+    if not records:
+        typer.echo("No canonical graph versions found.")
+        return
+    for record in records:
+        typer.echo(
+            f"{record['version_id']} | parent={record['parent_version_id'] or '-'} | "
+            f"patch={record['patch_id']} | run={record['run_id']}"
+        )
+
+
+@evolve_app.command("rollback")
+def evolution_rollback(
+    version_id: str = typer.Option(..., "--version-id"),
+    reason: str = typer.Option(..., "--reason"),
+    canonical_dir: Optional[Path] = typer.Option(None, "--canonical-dir"),
+) -> None:
+    """Append a selective compensating version for one graph version."""
+    with CanonicalGraphStore(canonical_dir) as store:
+        result = store.rollback_version(version_id, reason)
+    typer.echo(
+        f"Compensating version: {result['version_id']} | "
+        f"operations={result['operation_count']} | "
+        f"skipped={len(result.get('skipped_operation_ids', []))}"
+    )
+
+
 def _load_eval_report(path: Path | None) -> dict | None:
     if path is None:
         return None
@@ -324,7 +493,7 @@ def _load_eval_report(path: Path | None) -> dict | None:
 
 def _default_target_schema_version(proposal: dict) -> str:
     base = proposal.get("schema_version") or "schema"
-    suffix = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    suffix = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
     return f"{base}+{suffix}"
 
 

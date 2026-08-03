@@ -1,277 +1,201 @@
-# EvoLex 下一步实现清单
+# EvoLex 后续路线
+
+适用基线：0.3.0
 
-当前代码已经完成了 `Phase 1` 完整链路，以及 `Phase 2` 的简化链路。仓库已经具备从文档输入、语义原子抽取、结构校验，到实体解析、关系抽取、质量复核和 SQLite 发布的基本能力。
+## 已完成
 
-当前代码已经进入目标架构里的最小治理闭环：`Claim` / `Evidence` 对象槽位、`Policy` 路由、`Schema proposal` 候选、Candidate / Quarantine Registry、运行审计和多模型 OpenAI-compatible 接入已经落地。下一阶段的基础能力也已经补上：`Frozen Corpus` 回归基线、`Shadow` 评估、可恢复 checkpointer、运行回放，以及面向 canary / rollback 判断的跨运行治理摘要。
+- 同一片段一次主要响应联合输出 Mention、RelationCandidate、Claim 和 Evidence；
+- Relation 端点引用同响应 Mention ID，并在片段汇总时命名空间化；
+- Evidence 先过滤、Claim 后验证；
+- Mention 到实体的可审计解析；
+- 同类型、provenance-gated、complete-link 实体规范化；
+- 谓词和 relation identity 规范化、Evidence 聚合及功能型冲突；
+- Agent 工具调度、效用记录、依赖失效和 revision；
+- EvidenceContract 化 upsert 补丁；
+- 由 Evidence、端点依赖和基线邻接派生并冻结原始 ImpactDomain，接受操作声明域仅作记录；
+- 影子不变量、query-to-operation 静态关联、同基线反事实原因验证和冻结域外投影检查；
+- 反事实原因候选不超过 16 时在定义搜索空间内精确枚举；超过 16 时采用确定性固定点单删除回退，仅保证单删除局部最小，并明确标记不保证全局最优或一般集合包含极小；
+- Evidence/replay/non-interference/invariant/utility/certificate 六项布尔条件全部 AND 通过；`required_quorum=5`仅作为审计统计，不能覆盖任一硬门失败；
+- 判定和提交阶段重算因果验证凭证并核对 decision/evaluation/certificate 接受操作一致，存储层再核对提交清单；
+- pre-commit publish-confidence gate；
+- canonical stale-parent 检查、patch 幂等、版本/事件/活动指针同事务；
+- commit-before-local-publish；
+- entity/alias/relation contribution 和 delete tombstone；
+- later-change-aware、交错顺序可重算的追加式补偿；
+- run-start schema 固定、独立 symbol proposal、并发 observation/promotion 无丢更新；
+- checkpoint runtime/pipeline 继承与错模式拒绝；
+- 全局活动图及逐`document_id`来源投影的自包含静态HTML，并提供离线索引、筛选、证据和治理审计；
+- 8 文档无网络工程回归；
+- 专利初筛、保护策略和完整申请前文档包。
 
-本文只做一件事：把仓库当前已实现能力与 `langgraph_semiconductor_system_report_v2.html` 的目标能力对齐，整理出一份按执行顺序排列的下一步实现 backlog，便于直接进入工程实现。
+## P0：正式申请前
 
-## 当前进度
+### 1. 专业 claim chart
+
+由代理师逐项核对至少：
 
-### 已完成的主链路
+- CN120179832A
+- CN121787546A
+- US12423523B2
+- US12135740B1
+- US20260004204A1
+- US20230087667A1
+- US10915577B2
+- US11531705B2
+- US7873605B2
 
-- `ingest -> profile -> segment -> extract -> validate -> candidate_store`
-- `entity_resolve -> relation_extract -> quality_review -> publish`
+输出 family、priority、法律状态、独权要素映射及组合显而易见性风险。
 
-### 已完成的运行方式
+### 2. 同模型消融
 
-- 已有 CLI 入口，可直接处理文本输入和本地文件路径。
-- 已支持 `Phase 1` / `Phase 2` 管线切换。
-- 已支持 `DeepSeek`、通用本地 OpenAI-compatible 模型和本地 heuristic extractor 运行。
-- 已支持 `JSONL` candidate 输出。
-- 已支持 `SQLite` knowledge graph 输出。
+固定模型、prompt、schema、语料和温度，只改变：
 
-### 已完成的测试覆盖
+1. entity/relation separate；
+2. joint only；
+3. joint + entity canonicalization；
+4. joint + dual canonicalization；
+5. full evidence-governed evolution。
 
-- `Phase 1 graph`
-- `Phase 2 graph`
-- `chat controller / CLI`
-- `intent / DeepSeek client`
+当前 8 条回归同时改变 extractor 与 pipeline，只能作工程验证。
 
-### 当前能力边界
+### 3. 公开数据集
 
-- `semantic_atoms` 仍保留为兼容层，`Claim` / `Condition` / `Evidence` 已有最小对象化输出。
-- 实体解析已有决策记录，但仍以启发式规则为主。
-- 已有独立 `critic` / `policy` / `quarantine` / `registry_finalize` 闭环。
-- 已有 `Schema proposal` 候选存储；`shadow`、`frozen corpus`、治理摘要报告已经落地。
-- 已有版本治理字段、审计存储、可恢复 `checkpointer` 和运行回放。
+选择公开 joint entity-relation extraction benchmark，报告：
 
-## 目标进度
+- Entity/Relation P-R-F1；
+- overlapping relation；
+- orphan endpoints；
+- Evidence precision；
+- 调用次数、延迟和成本。
 
-下一阶段的目标能力只保留会影响实现顺序的部分：
+### 4. 治理链故障注入
 
-- `Claim` 中心知识模型
-- 强证据绑定与 `provenance`
-- 显式 `Policy / quarantine / publish` 路由
-- `Schema proposal` 与 `registry`
-- `Shadow schema / canary / 回滚`
-- 可重放、可追踪、带版本的运行状态
+将现有单元测试扩展为可随申请材料归档的独立报告，至少覆盖：
 
-## 关键接口变化
+- 原始影响域摘要在完整补丁、反事实重放、排除集合求解和最终重放间保持冻结；
+- 分别篡改基线、查询归因、求解结果、排除/接受集合、最终影子或门结果时，凭证重算失败且补丁不得提交；
+- 逐一翻转六项硬门中的任一条件，验证即使 quorum 统计达标也必须拒绝；
+- 同 patch、同接受操作和同凭证的提交清单可幂等返回；同 patch 但接受操作或凭证变化时必须拒绝；
+- `k<=16` 与穷举真值核对，`k>16` 只验证确定性、可行性和单删除局部最小，不报告全局最优。
 
-### GraphState 需要补充的字段
+### 5. 发明事实确认
 
-- 版本字段：`document_version`、`schema_version`、`policy_version`
-- 抽取对象字段：`mentions`、`measurements`、`conditions`、`claim_candidates`、`evidence_spans`
-- 决策对象字段：`entity_decisions`、`policy_decisions`、`schema_proposals`
+- 发明人、申请人；
+- 首次完成与首次公开日期；
+- GitHub、论文、答辩、客户演示；
+- 第三方代码/数据许可证；
+- 是否需要保密审查、PCT 或海外布局。
 
-### 需要新增的节点
+## P1：生产试点
 
-- `critic`
-- `policy`
-- `schema_gap`
-- `schema_proposer`
-- `quarantine`
+### 1. 人工审批
 
-### 需要新增的存储职责
+为以下动作增加 review queue：
 
-- `Candidate Registry`
-- `Quarantine Store`
-- `Run Audit Store`
-- `Schema Candidate Registry`
+- schema promotion；
+- functional relation conflict；
+- high-risk policy；
+- 大空间待排除集合固定点单删除 fallback；
+- contribution/tombstone 异常；
+- canonical 已提交但派生发布失败。
 
-## 实现清单状态
+### 2. 跨存储投递可靠性
 
-## 1. [已完成] Claim / Evidence 数据契约落地
+canonical 是事实源；增加：
 
-**目标**
+- transactional outbox；
+- 派生发布幂等键；
+- 重试与死信；
+- canonical—run KG 对账；
+- dashboard 告警。
 
-把当前由 `semantic_atoms` 主导的输出，升级为能承载目标系统的最小结构化对象模型。
+当前不宣称跨存储原子。
 
-**功能点**
+### 3. 权限与隐私
 
-- 在状态层新增独立对象槽位：`mentions`、`measurements`、`conditions`、`claim_candidates`、`evidence_spans`。
-- 抽取节点输出从“原子列表”升级为“对象包”，至少支持 `Mention`、`Measurement`、`Condition`、`Claim`、`Evidence` 五类对象。
-- 每个 `Claim` 必须关联至少一个 `Evidence`。
-- `Evidence` 至少包含：`document_id`、`segment_id`、`text/span`、`run_id`。
-- `candidate_store` 持久化时不再只写 `atom`，而是能写多对象类型。
-- `validate` 节点改为校验对象级必填字段，而不是只校验 atom。
+- OIDC/RBAC；
+- tenant isolation；
+- Evidence 字段级加密；
+- 密钥管理；
+- 审计日志签名；
+- retention/deletion policy；
+- 外部模型数据驻留控制。
 
-**验收清单**
+### 4. 领域不变量
 
-- 输入一段带条件和测量值的技术文本，输出中能区分 `Claim`、`Condition`、`Measurement`。
-- 每个 `Claim` 都能追到明确 `Evidence`。
-- 缺少 `evidence` 的 `Claim` 不能通过结构化校验。
-- candidate 输出中能看出对象类型，而不是只有混合 atom。
+把当前结构不变量扩展为客户配置：
 
-## 2. [已完成] 实体解析升级为决策型 Resolver
+- domain/range；
+- cardinality；
+- temporal consistency；
+- unit compatibility；
+- 产品/法规特定 query；
+- 受控人工豁免。
 
-**目标**
+## P2：算法增强
 
-把当前“按文本归并”的启发式 entity merge，升级为可解释的解析决策流程。
+### 1. Identity split
 
-**功能点**
+新增人工批准的 cluster split/unmerge：
 
-- `Resolver` 输出决策类型：`LINK` / `CREATE_CANDIDATE` / `AMBIGUOUS` / `REJECT`。
-- 增加别名归一化和单位归一化前处理。
-- 把“实体结果”与“实体决策记录”分开保存。
-- 对无法稳定链接的对象保留 `AMBIGUOUS`，不强行落正式实体。
-- `relation` / `claim` 后续只消费已解析或明确保留的对象。
+- 原贡献分区；
+- 关系重定向；
+- Evidence 保留；
+- 影响域验证；
+- 补偿版本。
 
-**验收清单**
+在完成前，不对外声称自动拆分。
 
-- 同名不同上下文对象不会被盲目合并。
-- 别名形式能归到同一 `canonical entity`。
-- 单位表达差异不会导致重复实体。
-- 歧义样本进入 `AMBIGUOUS`，不会直接发布。
+### 2. 大空间优化器
 
-## 3. [已完成] 独立 Critic + Policy 路由
+将 `>16` fallback 替换或补充为：
 
-**目标**
+- ILP/MaxSAT；
+- branch-and-bound；
+- 图分解；
+- 可验证上下界；
+- time budget 与最优性 gap。
 
-把当前简单质量打分改成“验证 -> 语义复核 -> 策略决策”的三段式门禁。
+### 3. Action-aware delete planning
 
-**功能点**
+当前 Agent 自动 planner 生成 Evidence 化 upsert；repository 支持 delete/tombstone 与版本补偿，但 shadow planner 不覆盖任意普通 delete patch。
 
-- 从 `quality_review` 中拆出独立的 `critic` 语义复核结果。
-- 新增 `policy` 节点，输出：`publish` / `candidate` / `quarantine` / `reject`。
-- 明确低、中、高风险规则：
-  - 低风险：新实例、别名、补证据
-  - 中风险：新关系、新属性、新类型候选
-  - 高风险：类型合并拆分、历史迁移
-- 图拓扑增加条件路由，不再只是一条直线走到 `publish`。
-- `quarantine` 路径保留失败原因和处理建议。
+若要扩大保护和产品能力，应增加：
 
-**验收清单**
+- action-aware shadow apply；
+- 删除端点/孤儿/级联不变量；
+- delete ImpactDomain；
+- delete 的因果排除与剩余子补丁求解；
+- mixed upsert/delete property tests。
 
-- 证据不足样本不会直接 `publish`。
-- 高风险变更不会进入正式发布路径。
-- `policy` 决策结果可在 run state 中查看。
-- `quarantine` 样本能看到明确原因标签。
+### 4. 跨文档 temporal identity
 
-## 4. [已完成] 版本化 State 与运行审计
+研究稳定 identity，而不是复用运行内 Mention ID：
 
-**目标**
+- document revision mapping；
+- temporal entity state；
+- same-as / split-from / supersedes；
+- Evidence validity interval。
 
-让每次运行具备最小可重放性和可追踪性。
+## P3：平台化
 
-**功能点**
+- Web/API 控制面；
+- Neo4j/RDF/Property Graph adapters；
+- Kafka/Pulsar ingestion；
+- model routing and cost budgets；
+- tenant-specific rules；
+- CI checks for schema/graph pull requests；
+- governance analytics；
+- plugin SDK。
 
-- 在状态层补充版本字段：`document_version`、`schema_version`、`policy_version`、`prompt_versions`、`model_routes`。
-- 所有输出对象都带：`run_id`、`document_id`、`document_version`、`schema_version`。
-- 增加运行审计存储，至少记录：节点执行顺序、状态转移、告警、`policy` 决策。
-- 保留稳定 `thread_id` 规则，避免同文档版本重复创建独立运行。
+## 验收原则
 
-**验收清单**
+每项新能力必须同时具备：
 
-- 同一文档重跑时能区分不同 `document_version`。
-- 任一 `claim` / `entity` / `relation` 都能追溯到 run 和版本。
-- 能查看一次运行经过了哪些节点和决策。
-- 状态结构包含目标版本字段，不再只有最小运行字段。
-
-## 5. [已完成] Candidate Registry 与 Quarantine 工作流
-
-**目标**
-
-把“候选输出文件”升级成可管理的候选知识池。
-
-**功能点**
-
-- 引入 `Candidate Registry` 存储层，保存：
-  - candidate objects
-  - entity decisions
-  - policy decisions
-  - quarantine records
-- `Candidate` 与 `Production` 明确隔离。
-- `Quarantine` 记录支持：
-  - 原因
-  - 风险等级
-  - 关联证据
-  - 建议动作
-- CLI 增加最小查询能力，至少能看：
-  - 最近 quarantine
-  - 最近 candidate
-  - 最近 policy 决策
-
-**验收清单**
-
-- 被 `quarantine` 的对象不会写入 production KG。
-- 可以查询到 `quarantine` 原因和原文证据。
-- `candidate` 与 `production` 的对象能明确区分。
-- 不依赖翻 `JSONL` 才能定位候选记录。
-
-## 6. [已完成] Schema Gap / Schema Proposal 最小闭环
-
-**目标**
-
-补上从实例抽取到 schema 候选生成的最小闭环。
-
-**功能点**
-
-- 新增 `schema_gap` / `schema_proposer` 子流程。
-- 识别“无法映射到现有类型/关系”的对象。
-- 生成 `schema proposal`，至少支持：
-  - 新类型提案
-  - 新关系提案
-  - 属性提案
-- 为 proposal 记录支持信号：
-  - 出现次数
-  - 独立文档数
-  - 关系模式一致性
-  - 证据覆盖率
-- 建立 `Schema Candidate Registry`。
-
-**验收清单**
-
-- 遇到未知但重复出现的概念时，不会被静默丢弃。
-- proposal 能看到支持它的样本和证据。
-- proposal 不会直接进入 production schema。
-- 同类 proposal 可以累积稳定性信号。
-
-## 7. [已完成] Frozen Corpus + Shadow Evaluation 回归基线
-
-**目标**
-
-为后续 schema 演化和模型升级建立最小回归护栏，并支持恢复 / 回放调试。
-
-**功能点**
-
-- 固定仓库内样本文档作为 `frozen corpus`。
-- 引入 `shadow` 评估输出，不写 production KG。
-- 每次 `schema` / `prompt` / `model` 变化时，比较：
-  - claim 数量变化
-  - evidence coverage
-  - unsupported / ambiguous 比例
-  - entity remap 数量
-- 形成最小回归报告和 shadow 对比报告。
-- 在每个节点完成后写入 `GraphState` checkpoint。
-- 支持按 `run_id` 回放节点序列，按 `thread_id` 从最新 checkpoint 恢复。
-- 聚合 schema proposal 与 policy decision，给出 canary / rollback 判断信号。
-
-**新增入口**
-
-- `evolex eval frozen`
-- `evolex eval shadow`
-- `evolex run replay --run-id RUN-...`
-- `evolex run resume --thread-id document:...`
-- `evolex schema candidates`
-- `evolex schema promote-ready`
-- `evolex schema promote --proposal-id ...`
-- `evolex schema promotions`
-
-**验收清单**
-
-- 新旧版本可在同一批文档上对比结果。
-- `shadow` 结果不会覆盖 production。
-- 回归报告至少能反映 `claim` / `evidence` / `entity` 三类核心差异。
-- 版本升级后可以判断是“更好、持平还是退化”。
-- checkpoint 可以重放节点顺序和策略决策。
-- resume 可以从最新 checkpoint 继续生成最终状态。
-- schema proposal 可以通过自动门禁进入 `promoted` 或 `blocked` 状态。
-- 多 segment LLM 抽取支持有界并发，并保持输出顺序稳定。
-
-## 完成定义
-
-这份 backlog 的当前完成定义不是把所有生产化能力一次做完，而是完成以下核心收敛项：
-
-- `Claim / Evidence` 契约
-- `Resolver` 决策化
-- `Policy` 路由
-- `Candidate / Quarantine` 管理
-- `Schema proposal` 最小闭环
-- `Frozen Corpus` / `Shadow` 回归报告
-- `Checkpoint` / `Replay` / `Resume` 最小调试闭环
-- 自动 schema promotion 门禁
-- API segment-level 并发抽取
-
-后续真正的生产化工作应集中在：更强的 resolver、真实 canary 流量接入、自动回滚策略、稳定 schema 版本发布物，以及可选的人工审批 UI。
+1. 数据契约；
+2. 失败语义；
+3. 审计记录；
+4. 可重复测试；
+5. 回滚/补偿方案；
+6. 文档中的非保证边界；
+7. 若进入权利要求，则具有源码、测试和附图证据。

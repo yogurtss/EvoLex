@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from evolex.agentic.math import action_utility, expected_information_gain
-from evolex.agentic.metrics import graph_metrics, publish_confidence
+from evolex.agentic.metrics import graph_metrics, publish_gate
 from evolex.graph.state import GraphState
 
 
@@ -126,6 +126,61 @@ class EntityResolutionAgent:
         return []
 
 
+class CanonicalizationAgent:
+    """Canonicalize identity hypotheses while preserving reversible lineage."""
+
+    name = "CanonicalizationAgent"
+
+    def propose(
+        self,
+        state: GraphState,
+        uncertainty: dict[str, float],
+        completed_tools: set[str],
+    ) -> list[AgentProposal]:
+        proposals: list[AgentProposal] = []
+        if (
+            "entity_resolve_tool" in completed_tools
+            and "entity_merge_tool" not in completed_tools
+        ):
+            proposals.append(
+                AgentProposal.from_scores(
+                    agent_name="EntityCanonicalizationAgent",
+                    proposed_action="entity_merge_tool",
+                    expected_information_gain_value=max(
+                        uncertainty["entity_uncertainty"] - 0.3,
+                        0.24,
+                    ),
+                    risk=0.14,
+                    cost=0.5,
+                    reason=(
+                        "same-type entity identity hypotheses need evidence-constrained "
+                        "canonicalization before relation endpoints are materialized"
+                    ),
+                )
+            )
+        if (
+            "relation_extract_tool" in completed_tools
+            and "relation_merge_tool" not in completed_tools
+        ):
+            proposals.append(
+                AgentProposal.from_scores(
+                    agent_name="RelationCanonicalizationAgent",
+                    proposed_action="relation_merge_tool",
+                    expected_information_gain_value=max(
+                        uncertainty["relation_uncertainty"] - 0.35,
+                        0.23,
+                    ),
+                    risk=0.12,
+                    cost=0.5,
+                    reason=(
+                        "duplicate relation assertions and predicate aliases must be "
+                        "merged without discarding their evidence lineage"
+                    ),
+                )
+            )
+        return proposals
+
+
 class EvidenceAgent:
     name = "EvidenceAgent"
 
@@ -185,20 +240,29 @@ class GraphCriticAgent:
             and "relation_extract_tool" not in completed_tools
         ):
             eig = expected_information_gain(uncertainty["relation_uncertainty"], 0.4)
+            merge_pending = "entity_merge_tool" not in completed_tools
             proposals.append(
                 AgentProposal.from_scores(
                     agent_name=self.name,
                     proposed_action="relation_extract_tool",
-                    expected_information_gain_value=max(eig, 0.3),
-                    risk=0.12,
-                    cost=1.0,
-                    reason="resolved entities are available but graph edges have not been extracted",
+                    expected_information_gain_value=(
+                        0.04 if merge_pending else max(eig, 0.3)
+                    ),
+                    risk=0.5 if merge_pending else 0.12,
+                    cost=1.2 if merge_pending else 1.0,
+                    reason=(
+                        "entity canonicalization should complete before relation endpoints "
+                        "are materialized"
+                        if merge_pending
+                        else "resolved entities are available but graph edges have not been extracted"
+                    ),
                 )
             )
 
         if (
             "relation_extract_tool" in completed_tools
             and metrics["graph_sparse_penalty"] > 0.7
+            and state.get("relation_extraction_mode") != "joint"
             and _tool_count(state, "relation_extract_tool") < 2
         ):
             proposals.append(
@@ -213,7 +277,8 @@ class GraphCriticAgent:
             )
 
         if (
-            "relation_extract_tool" in completed_tools
+            "relation_merge_tool" in completed_tools
+            and "evolution_consensus_tool" in completed_tools
             and "quality_review_tool" not in completed_tools
         ):
             proposals.append(
@@ -239,7 +304,7 @@ class SchemaAgent:
         completed_tools: set[str],
     ) -> list[AgentProposal]:
         proposals: list[AgentProposal] = []
-        if "relation_extract_tool" in completed_tools and "schema_gap_tool" not in completed_tools:
+        if "relation_merge_tool" in completed_tools and "schema_gap_tool" not in completed_tools:
             proposals.append(
                 AgentProposal.from_scores(
                     agent_name=self.name,
@@ -268,6 +333,102 @@ class SchemaAgent:
         return proposals
 
 
+class EvolutionAgent:
+    """Stage, validate, and commit evidence-coupled graph patches."""
+
+    name = "EvolutionAgent"
+
+    def propose(
+        self,
+        state: GraphState,
+        uncertainty: dict[str, float],
+        completed_tools: set[str],
+    ) -> list[AgentProposal]:
+        proposals: list[AgentProposal] = []
+        schema_ready = (
+            "schema_gap_tool" in completed_tools
+            and (
+                not state.get("unresolved_terms")
+                or "schema_proposer_tool" in completed_tools
+            )
+        )
+        if (
+            "relation_merge_tool" in completed_tools
+            and schema_ready
+            and "evolution_plan_tool" not in completed_tools
+        ):
+            proposals.append(
+                AgentProposal.from_scores(
+                    agent_name="EvolutionPlanningAgent",
+                    proposed_action="evolution_plan_tool",
+                    expected_information_gain_value=0.31,
+                    risk=0.08,
+                    cost=0.7,
+                    reason=(
+                        "canonical entities and relations must become evidence-scoped "
+                        "patch atoms before any persistent graph change"
+                    ),
+                )
+            )
+        if (
+            "evolution_plan_tool" in completed_tools
+            and "evolution_shadow_tool" not in completed_tools
+        ):
+            proposals.append(
+                AgentProposal.from_scores(
+                    agent_name="ShadowValidationAgent",
+                    proposed_action="evolution_shadow_tool",
+                    expected_information_gain_value=0.34,
+                    risk=0.05,
+                    cost=0.8,
+                    reason=(
+                        "the evidence-derived impact domain must synthesize and run "
+                        "shadow invariants before promotion"
+                    ),
+                )
+            )
+        if (
+            "evolution_shadow_tool" in completed_tools
+            and "evolution_consensus_tool" not in completed_tools
+        ):
+            proposals.append(
+                AgentProposal.from_scores(
+                    agent_name="EvolutionConsensusAgent",
+                    proposed_action="evolution_consensus_tool",
+                    expected_information_gain_value=0.28,
+                    risk=0.04,
+                    cost=0.5,
+                    reason=(
+                        "independent evidence, replay, non-interference, and invariant "
+                        "votes are required for the compensated patch"
+                    ),
+                )
+            )
+        if (
+            "policy_tool" in completed_tools
+            and _policy_action(state) == "publish"
+            and "evolution_consensus_tool" in completed_tools
+            and state.get("evolution_decision", {}).get("accepted")
+            and "evolution_commit_tool" not in completed_tools
+            and publish_gate(state)[0]
+        ):
+            proposals.append(
+                AgentProposal.from_scores(
+                    agent_name="EvolutionCommitAgent",
+                    proposed_action="evolution_commit_tool",
+                    expected_information_gain_value=0.16,
+                    risk=0.06,
+                    cost=0.8,
+                    reason=(
+                        "the policy-approved and shadow-validated patch must be "
+                        "atomically committed to the canonical graph before the "
+                        "run-level publication view is finalized"
+                    ),
+                )
+            )
+        return proposals
+
+
 class PolicyAgent:
     name = "PolicyAgent"
 
@@ -278,7 +439,11 @@ class PolicyAgent:
         completed_tools: set[str],
     ) -> list[AgentProposal]:
         proposals: list[AgentProposal] = []
-        if "quality_review_tool" in completed_tools and "critic_tool" not in completed_tools:
+        if (
+            "quality_review_tool" in completed_tools
+            and "evolution_consensus_tool" in completed_tools
+            and "critic_tool" not in completed_tools
+        ):
             proposals.append(
                 AgentProposal.from_scores(
                     agent_name=self.name,
@@ -303,9 +468,44 @@ class PolicyAgent:
         if "policy_tool" in completed_tools:
             action = _policy_action(state)
             if action == "publish" and "publish_tool" not in completed_tools:
+                commit = state.get("evolution_commit", {})
+                gate_passed, confidence, threshold = publish_gate(state)
+                if "evolution_commit_tool" not in completed_tools:
+                    if (
+                        not gate_passed
+                        and "registry_finalize_tool" not in completed_tools
+                    ):
+                        proposals.append(
+                            AgentProposal.from_scores(
+                                agent_name=self.name,
+                                proposed_action="registry_finalize_tool",
+                                expected_information_gain_value=0.1,
+                                risk=max(0.0, 1.0 - confidence),
+                                cost=0.4,
+                                reason=(
+                                    "pre-commit publish confidence gate failed: "
+                                    f"{confidence:.4f} < {threshold:.4f}"
+                                ),
+                            )
+                        )
+                    return proposals
+                if commit.get("status") != "committed":
+                    proposals.append(
+                        AgentProposal.from_scores(
+                            agent_name=self.name,
+                            proposed_action="registry_finalize_tool",
+                            expected_information_gain_value=0.1,
+                            risk=0.04,
+                            cost=0.4,
+                            reason=(
+                                "canonical evolution was not committed; persist the "
+                                "candidate or quarantine decision without publishing"
+                            ),
+                        )
+                    )
+                    return proposals
                 metrics = graph_metrics(state)
-                confidence = publish_confidence(state)
-                if confidence >= 0.6 and metrics["graph_sparse_penalty"] <= 0.7:
+                if gate_passed and metrics["graph_sparse_penalty"] <= 0.7:
                     proposals.append(
                         AgentProposal.from_scores(
                             agent_name=self.name,
@@ -345,9 +545,11 @@ def default_agents() -> list[KGAgent]:
     return [
         ExtractionAgent(),
         EntityResolutionAgent(),
+        CanonicalizationAgent(),
         EvidenceAgent(),
         GraphCriticAgent(),
         SchemaAgent(),
+        EvolutionAgent(),
         PolicyAgent(),
     ]
 

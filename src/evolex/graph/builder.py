@@ -9,6 +9,7 @@ from evolex.agents.deepseek_client import BaseExtractor, LLMConfig, get_default_
 from evolex.graph.state import GraphState
 from evolex.nodes.candidate_store import make_candidate_store_node
 from evolex.nodes.critic import critic_node
+from evolex.nodes.entity_merge import entity_merge_node
 from evolex.nodes.entity_resolve import entity_resolve_node
 from evolex.nodes.extract import make_extract_node
 from evolex.nodes.ingest import ingest_node
@@ -17,8 +18,9 @@ from evolex.nodes.profile import profile_node
 from evolex.nodes.publish import make_publish_node
 from evolex.nodes.quality_review import make_quality_review_node
 from evolex.nodes.relation_extract import make_relation_extract_node
+from evolex.nodes.relation_merge import relation_merge_node
 from evolex.nodes.registry_finalize import make_registry_finalize_node
-from evolex.nodes.schema_gap import schema_gap_node
+from evolex.nodes.schema_gap import make_schema_gap_node
 from evolex.nodes.schema_proposer import schema_proposer_node
 from evolex.nodes.segment import segment_node
 from evolex.nodes.validate import validate_node
@@ -36,6 +38,7 @@ def _pipeline_nodes(
     pipeline: PipelineMode,
 ) -> list[tuple[str, NodeFunc]]:
     """Build the ordered list of (name, func) tuples for the given pipeline."""
+    schema_dir = (output_dir / "schema_candidates") if output_dir else None
     base: list[tuple[str, NodeFunc]] = [
         ("ingest", ingest_node),
         ("profile", profile_node),
@@ -52,7 +55,9 @@ def _pipeline_nodes(
         base.extend(
             [
                 ("entity_resolve", entity_resolve_node),
+                ("entity_merge", entity_merge_node),
                 ("relation_extract", make_relation_extract_node(extractor)),
+                ("relation_merge", relation_merge_node),
                 ("quality_review", make_quality_review_node()),
                 ("publish", make_publish_node(output_dir)),
             ]
@@ -63,8 +68,10 @@ def _pipeline_nodes(
     base.extend(
         [
             ("entity_resolve", entity_resolve_node),
+            ("entity_merge", entity_merge_node),
             ("relation_extract", make_relation_extract_node(extractor)),
-            ("schema_gap", schema_gap_node),
+            ("relation_merge", relation_merge_node),
+            ("schema_gap", make_schema_gap_node(schema_dir)),
             ("schema_proposer", schema_proposer_node),
             ("quality_review", make_quality_review_node()),
             ("critic", critic_node),
@@ -294,6 +301,48 @@ class PipelineGraph:
         self._step_index = int(checkpoint.get("step_index", start_index))
 
         if self.pipeline == "phase3":
+            # A checkpoint records a completed node, but a branch decision is
+            # made immediately after that node.  On resume, consume that
+            # already-produced output before walking the remaining linear tail.
+            if (
+                completed == "quality_review"
+                and route_after_validate(state) == "quarantine"
+            ):
+                self._run_node(state, "quarantine", self.node_map["quarantine"])
+                if on_node is not None:
+                    on_node("quarantine")
+                self._run_node(
+                    state,
+                    "registry_finalize",
+                    self.node_map["registry_finalize"],
+                )
+                if on_node is not None:
+                    on_node("registry_finalize")
+                return state
+
+            if completed == "policy":
+                action = route_after_policy(state)
+                if action == "publish":
+                    self._run_node(state, "publish", self.node_map["publish"])
+                    if on_node is not None:
+                        on_node("publish")
+                elif action == "quarantine":
+                    self._run_node(
+                        state,
+                        "quarantine",
+                        self.node_map["quarantine"],
+                    )
+                    if on_node is not None:
+                        on_node("quarantine")
+                self._run_node(
+                    state,
+                    "registry_finalize",
+                    self.node_map["registry_finalize"],
+                )
+                if on_node is not None:
+                    on_node("registry_finalize")
+                return state
+
             tail = [(name, fn) for name, fn in self.nodes[start_index:]]
             for node_name, node_func in tail:
                 if node_name in {"quarantine", "publish", "registry_finalize"}:
@@ -412,6 +461,7 @@ class LangGraphPipelineRunner:
             typed=(pipeline == "phase3"),
             llm_config=llm_config,
         )
+        self.extractor = extractor
         graph = StateGraph(GraphState)
         nodes = _pipeline_nodes(extractor, output_dir, pipeline)
         for node_name, node_func in nodes:

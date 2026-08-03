@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from evolex.graph.state import GraphState
 
-# Minimum required evidence-to-claim ratio to pass critic
-MIN_EVIDENCE_RATIO = 0.5
-
-
 def critic_node(state: GraphState) -> dict:
     """Semantic critic: verify evidence sufficiency and basic consistency.
 
@@ -17,9 +13,6 @@ def critic_node(state: GraphState) -> dict:
     evidence_by_id = {ev.get("evidence_id"): ev for ev in evidence_spans}
 
     critic_results: list[dict] = []
-    approved_count = 0
-    total_claims = len(claims)
-
     for idx, claim in enumerate(claims):
         issues: list[str] = []
 
@@ -44,9 +37,6 @@ def critic_node(state: GraphState) -> dict:
             issues.append("low_confidence")
 
         verdict = "approved" if not issues else "rejected"
-        if verdict == "approved":
-            approved_count += 1
-
         critic_results.append({
             "claim_index": idx,
             "claim_id": claim.get("claim_id", ""),
@@ -54,10 +44,6 @@ def critic_node(state: GraphState) -> dict:
             "issues": issues,
             "confidence": confidence,
         })
-
-    # Overall signal
-    overall_coverage = approved_count / max(total_claims, 1)
-    critic_approved = overall_coverage >= MIN_EVIDENCE_RATIO
 
     return {
         "critic_results": critic_results,

@@ -77,7 +77,7 @@ class CheckpointStore:
 
     def latest_for_thread(self, thread_id: str) -> dict[str, Any] | None:
         return self._fetch_one(
-            "SELECT run_id, thread_id, node_name, step_index, state_json, created_at FROM checkpoints WHERE thread_id = ? ORDER BY step_index DESC, id DESC LIMIT 1",
+            "SELECT run_id, thread_id, node_name, step_index, state_json, created_at FROM checkpoints WHERE thread_id = ? ORDER BY id DESC LIMIT 1",
             (thread_id,),
         )
 

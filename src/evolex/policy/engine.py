@@ -26,8 +26,6 @@ def assess_risk(signals: dict) -> RiskLevel:
 
     # High evidence coverage signals lower risk
     evidence_coverage = float(signals.get("evidence_coverage", 0.0))
-    independent_docs = int(signals.get("independent_document_count", 0))
-
     if evidence_coverage < 0.5:
         return "medium"
 

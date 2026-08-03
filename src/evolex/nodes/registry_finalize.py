@@ -15,18 +15,23 @@ def make_registry_finalize_node(output_dir: Path | None = None):
         run_id = state["run_id"]
         registry = CandidateRegistry(registry_dir)
 
-        for decision in state.get("entity_decisions", []):
-            registry.put_entity_decision(run_id, decision)
-
-        for decision in state.get("policy_decisions", []):
-            registry.put_policy_decision(run_id, decision)
-
-        for event in state.get("audit_events", []):
-            registry.put_audit_event(run_id, event)
-
         action = _policy_action(state)
-        if action == "quarantine" or state.get("status") == "quarantined":
-            registry.put_quarantine(run_id, _quarantine_record(state))
+        quarantine_record = (
+            _quarantine_record(state)
+            if action == "quarantine" or state.get("status") == "quarantined"
+            else None
+        )
+        candidates = _candidate_snapshot(state)
+        registry.replace_run_snapshot(
+            run_id,
+            entity_decisions=list(state.get("entity_decisions", [])),
+            policy_decisions=list(state.get("policy_decisions", [])),
+            audit_events=list(state.get("audit_events", [])),
+            merge_decisions=list(state.get("merge_decisions", [])),
+            agent_trace=list(state.get("agent_trace", [])),
+            candidates=candidates,
+            quarantine_record=quarantine_record,
+        )
 
         schema_store = SchemaCandidateStore(schema_dir)
         for proposal in state.get("schema_proposals", []):
@@ -35,6 +40,42 @@ def make_registry_finalize_node(output_dir: Path | None = None):
         return {"registry_output_path": str(registry._db_path(run_id))}
 
     return registry_finalize_node
+
+
+def _candidate_snapshot(state: GraphState) -> list[tuple[str, dict]]:
+    """Build the complete candidate projection that finalization replaces.
+
+    ``candidate_store`` writes typed candidates early in the pipeline.  Because
+    finalization intentionally replaces the whole run projection for
+    idempotence, it must carry those objects forward as well as the later
+    evolution artefacts.
+    """
+    candidates: list[tuple[str, dict]] = []
+    for object_type, state_key in (
+        ("atom", "semantic_atoms"),
+        ("mention", "mentions"),
+        ("measurement", "measurements"),
+        ("condition", "conditions"),
+        ("claim", "claim_candidates"),
+        ("evidence", "evidence_spans"),
+    ):
+        candidates.extend(
+            (object_type, value)
+            for value in state.get(state_key, [])
+            if isinstance(value, dict) and value
+        )
+
+    candidates.extend(
+        (object_type, value)
+        for object_type, value in (
+            ("graph_patch", state.get("graph_patch")),
+            ("shadow_evaluation", state.get("shadow_evaluation")),
+            ("evolution_decision", state.get("evolution_decision")),
+            ("evolution_commit", state.get("evolution_commit")),
+        )
+        if isinstance(value, dict) and value
+    )
+    return candidates
 
 
 def _policy_action(state: GraphState) -> str:

@@ -1,0 +1,294 @@
+{
+  "stage": 2,
+  "terminology_ledger": [
+    {
+      "concept": "mention",
+      "canonical_zh": "实体提及",
+      "source_terms": [
+        "mention",
+        "entity mention"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "relation candidate",
+      "canonical_zh": "关系候选",
+      "source_terms": [
+        "relation candidate"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "evidence span",
+      "canonical_zh": "证据片段",
+      "source_terms": [
+        "evidence",
+        "evidence span"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "canonical entity",
+      "canonical_zh": "规范实体",
+      "source_terms": [
+        "canonical entity"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "canonical relation",
+      "canonical_zh": "规范关系",
+      "source_terms": [
+        "canonical relation"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "evidence contract",
+      "canonical_zh": "证据契约",
+      "source_terms": [
+        "EvidenceContract",
+        "evidence contract"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "impact domain",
+      "canonical_zh": "影响域",
+      "source_terms": [
+        "ImpactDomain",
+        "affected domain"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "shadow graph",
+      "canonical_zh": "影子图",
+      "source_terms": [
+        "shadow graph",
+        "shadow snapshot"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "counterfactual cause operation",
+      "canonical_zh": "反事实原因操作",
+      "source_terms": [
+        "counterfactual_cause_operation_ids"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "excluded update set",
+      "canonical_zh": "待排除更新操作集合",
+      "source_terms": [
+        "compensation_operation_ids",
+        "excluded operations"
+      ],
+      "forbidden_aliases": [
+        "补偿操作子集"
+      ]
+    },
+    {
+      "concept": "retained subpatch",
+      "canonical_zh": "剩余子补丁",
+      "source_terms": [
+        "retained operations",
+        "accepted operations"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "causal validation certificate",
+      "canonical_zh": "因果验证凭证",
+      "source_terms": [
+        "causal_validation_certificate"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "commit manifest",
+      "canonical_zh": "提交清单",
+      "source_terms": [
+        "commit_manifest"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "canonical graph store",
+      "canonical_zh": "规范图存储",
+      "source_terms": [
+        "canonical store",
+        "canonical graph"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "version contribution",
+      "canonical_zh": "版本贡献",
+      "source_terms": [
+        "version contribution"
+      ],
+      "forbidden_aliases": []
+    },
+    {
+      "concept": "tombstone",
+      "canonical_zh": "删除墓碑",
+      "source_terms": [
+        "tombstone"
+      ],
+      "forbidden_aliases": []
+    }
+  ],
+  "input_operation_output_map": [
+    {
+      "input": "固定父图版本基线和来源绑定候选图补丁",
+      "operation": "消费来源锚、声明对象、端点依赖和基线邻接",
+      "output": "冻结的原始影响域及摘要",
+      "source_ids": [
+        "C007",
+        "C008"
+      ]
+    },
+    {
+      "input": "候选图补丁、固定基线及冻结影响域",
+      "operation": "影子执行、结构查询和域外投影比较",
+      "output": "带操作关联的查询结果和结构摘要",
+      "source_ids": [
+        "C009"
+      ]
+    },
+    {
+      "input": "失败查询及关联操作",
+      "operation": "依赖闭包排除、同基线反事实重放和待排除集合求解",
+      "output": "反事实原因记录、待排除集合和经重验剩余子补丁",
+      "source_ids": [
+        "C010",
+        "C019"
+      ]
+    },
+    {
+      "input": "基线、影响域、原因、排除/接受操作及重放结果",
+      "operation": "规范序列化、内容寻址摘要及两阶段重算",
+      "output": "因果验证凭证和一致的提交选择",
+      "source_ids": [
+        "C011",
+        "C019",
+        "E005"
+      ]
+    },
+    {
+      "input": "凭证核对后的接受操作和提交清单",
+      "operation": "提交清单幂等核对及规范图单库事务",
+      "output": "关联凭证的图版本和图事件，或隔离/拒绝结果",
+      "source_ids": [
+        "C012",
+        "E006"
+      ]
+    },
+    {
+      "input": "可选技术文档源片段",
+      "operation": "联合抽取、证据先行校验及双层规范化",
+      "output": "作为候选图补丁来源的规范实体、规范关系及源断言快照",
+      "source_ids": [
+        "C001",
+        "C002",
+        "C003",
+        "C004",
+        "C005",
+        "C006"
+      ]
+    }
+  ],
+  "formula_inventory": [
+    {
+      "source_id": "E001",
+      "source_number": "源码公式A",
+      "technical_role": "聚合同一规范关系的多项证据置信度，并对后续证据施加折扣。",
+      "disposition": "specification-equation-1"
+    },
+    {
+      "source_id": "E002",
+      "source_number": "源码公式B",
+      "technical_role": "限制关系聚合置信度随片段数量增长的幅度。",
+      "disposition": "specification-equation-2"
+    },
+    {
+      "source_id": "E003",
+      "source_number": "源码公式C",
+      "technical_role": "度量待排除更新操作集合的编辑数、影响对象数量和证据损失。",
+      "disposition": "specification-equation-3"
+    },
+    {
+      "source_id": "E004",
+      "source_number": "源码公式D",
+      "technical_role": "在 Agent 动作选择中平衡信息增益、执行成本和风险。",
+      "disposition": "specification-only-noncore-equation-4"
+    },
+    {
+      "source_id": "E005",
+      "source_number": "源码公式E",
+      "technical_role": "把基线、影响域、查询原因、排除集合、剩余操作及验证结果绑定为内容寻址因果验证凭证。",
+      "disposition": "specification-equation-5-and-claim-1"
+    },
+    {
+      "source_id": "E006",
+      "source_number": "源码公式F",
+      "technical_role": "把实际提交选择及验证凭证绑定到幂等提交清单。",
+      "disposition": "specification-equation-6-and-claim-7"
+    }
+  ],
+  "figure_inventory": [
+    {
+      "source_id": "F001",
+      "source_number": "保护链",
+      "type": "methodology",
+      "disposition": "redraw-as-figure-1"
+    },
+    {
+      "source_id": "F002",
+      "source_number": "系统架构",
+      "type": "methodology",
+      "disposition": "redraw-as-figure-2"
+    },
+    {
+      "source_id": "F003",
+      "source_number": "补偿闭环",
+      "type": "methodology",
+      "disposition": "redraw-as-figure-3"
+    },
+    {
+      "source_id": "F004",
+      "source_number": "版本生命周期",
+      "type": "methodology",
+      "disposition": "redraw-as-figure-6"
+    },
+    {
+      "source_id": "F005",
+      "source_number": "因果验证凭证机制",
+      "type": "methodology",
+      "disposition": "redraw-as-figure-3-and-figure-4"
+    },
+    {
+      "source_id": "F006",
+      "source_number": "联合抽取与双层规范化",
+      "type": "methodology",
+      "disposition": "redraw-as-figure-5"
+    }
+  ],
+  "implementation_gaps": [
+    "自动planner和影子执行器当前只覆盖证据化upsert，不覆盖任意普通delete补丁。",
+    "候选数超过十六个时只保证固定点单删除局部最小，不保证全局或一般集合包含极小。",
+    "规范图与运行级发布库之间不存在分布式原子事务。",
+    "当前结构投影检查不证明任意业务查询语义等价。",
+    "内容寻址凭证不提供带密钥身份认证，能够同时改写内容和摘要的对手需要额外签名或不可变日志。",
+    "当前不提供任意历史误合并实体簇的自动拆分。",
+    "八条项目自有回归语料需要公开语料和同模型消融补充。"
+  ],
+  "gate": {
+    "all_core_operations_have_io": true,
+    "all_formulas_disposed": true,
+    "all_figures_disposed": true,
+    "status": "passed"
+  }
+}

@@ -14,21 +14,81 @@ def make_relation_extract_node(extractor: BaseExtractor):
     def relation_extract_node(state: GraphState) -> dict:
         atoms = state.get("semantic_atoms", [])
         entities = state.get("entities", [])
+        relation_candidates = state.get("relation_candidates", [])
         llm_call_count = state.get("llm_call_count", 0)
         warnings: list[str] = list(state.get("warnings", []))
 
-        if not atoms or not entities:
+        if not entities:
             return {"relations": [], "warnings": warnings}
 
-        if extractor.supports_relation_extraction:
+        relations = _materialize_joint_relations(
+            relation_candidates,
+            state.get("mention_entity_map", {}),
+        )
+        mention_entity_map = state.get("mention_entity_map", {})
+        rejected_candidates = []
+        for item in relation_candidates:
+            subject_entity_id = mention_entity_map.get(
+                str(item.get("subject_mention_id", ""))
+            )
+            object_entity_id = mention_entity_map.get(
+                str(item.get("object_mention_id", ""))
+            )
+            if (
+                item.get("endpoint_validation_status") == "invalid"
+                or not subject_entity_id
+                or not object_entity_id
+                or subject_entity_id == object_entity_id
+            ):
+                rejected = dict(item)
+                errors = list(rejected.get("endpoint_validation_errors", []))
+                if subject_entity_id and subject_entity_id == object_entity_id:
+                    errors.append("canonical_endpoint_collapse")
+                if not errors:
+                    errors.append("unresolved_endpoint_after_entity_resolution")
+                rejected["endpoint_validation_errors"] = errors
+                rejected_candidates.append(rejected)
+        if relation_candidates and not relations:
+            warnings.append(
+                "Joint relation candidates were present but none had two resolved endpoints."
+            )
+        elif rejected_candidates:
+            warnings.append(
+                f"{len(rejected_candidates)} of {len(relation_candidates)} joint relation "
+                "candidates were held because one or both mention endpoints were unresolved."
+            )
+
+        if relations:
+            extraction_mode = "joint"
+        elif not atoms:
+            extraction_mode = "none"
+        elif extractor.supports_relation_extraction:
             relations, llm_call_count, warnings = _llm_extract(
                 extractor, atoms, entities, llm_call_count, warnings
             )
+            extraction_mode = "relation_fallback"
         else:
             relations = _heuristic_extract(atoms, entities)
+            extraction_mode = "heuristic_fallback"
 
         return {
             "relations": relations,
+            "relation_extraction_mode": extraction_mode,
+            "joint_relation_yield": len(relations) if extraction_mode == "joint" else 0,
+            "relation_endpoint_failures": [
+                {
+                    "relation_candidate_id": item.get(
+                        "relation_candidate_id", ""
+                    ),
+                    "subject_mention_id": item.get("subject_mention_id", ""),
+                    "object_mention_id": item.get("object_mention_id", ""),
+                    "errors": item.get(
+                        "endpoint_validation_errors",
+                        ["unresolved_endpoint_after_entity_resolution"],
+                    ),
+                }
+                for item in rejected_candidates
+            ],
             "llm_call_count": llm_call_count,
             "warnings": warnings,
         }
@@ -124,6 +184,42 @@ def _heuristic_extract(atoms: list[dict], entities: list[dict]) -> list[dict]:
                     "confidence": 0.55,
                 })
 
+    return relations
+
+
+def _materialize_joint_relations(
+    candidates: list[dict],
+    mention_entity_map: dict[str, str],
+) -> list[dict]:
+    """Resolve mention-scoped endpoints without asking the model again."""
+    relations: list[dict] = []
+    for candidate in candidates:
+        if candidate.get("endpoint_validation_status") == "invalid":
+            continue
+        subject_mention_id = str(candidate.get("subject_mention_id", ""))
+        object_mention_id = str(candidate.get("object_mention_id", ""))
+        subject_entity_id = mention_entity_map.get(subject_mention_id)
+        object_entity_id = mention_entity_map.get(object_mention_id)
+        if not subject_entity_id or not object_entity_id:
+            continue
+        if subject_entity_id == object_entity_id:
+            continue
+        relations.append(
+            {
+                "relation_id": f"rel-{len(relations) + 1:04d}",
+                "subject_entity_id": subject_entity_id,
+                "predicate": str(candidate.get("predicate", "related_to")),
+                "object_entity_id": object_entity_id,
+                "evidence": str(candidate.get("evidence", "")),
+                "evidence_ids": list(candidate.get("evidence_ids", [])),
+                "source_relation_candidate_ids": [
+                    str(candidate.get("relation_candidate_id", ""))
+                ],
+                "segment_ids": [str(candidate.get("segment_id", ""))],
+                "confidence": float(candidate.get("confidence", 0.5)),
+                "extraction_mode": "joint",
+            }
+        )
     return relations
 
 

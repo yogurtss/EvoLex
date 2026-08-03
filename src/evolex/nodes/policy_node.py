@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from evolex.graph.state import GraphState
-from evolex.policy.engine import decide_policy
+from evolex.policy.engine import assess_risk, decide_policy
 
 
 def policy_node(state: GraphState) -> dict:
@@ -51,7 +51,26 @@ def policy_node(state: GraphState) -> dict:
     }
 
     action = decide_policy(signals)
+    risk_level = assess_risk(signals)
     reasons: list[str] = []
+    evolution_decision = state.get("evolution_decision")
+    evolution_gate_passed = (
+        bool(evolution_decision.get("accepted"))
+        if isinstance(evolution_decision, dict)
+        else None
+    )
+    relation_conflicts = state.get("relation_conflicts", [])
+    relation_endpoint_failures = state.get("relation_endpoint_failures", [])
+
+    if evolution_gate_passed is False and action == "publish":
+        action = "candidate"
+        reasons.append("evolution_shadow_gate_not_accepted")
+    if relation_conflicts:
+        action = "quarantine"
+        reasons.append("unresolved_functional_relation_conflict")
+    if relation_endpoint_failures and action == "publish":
+        action = "candidate"
+        reasons.append("unresolved_joint_relation_endpoint")
 
     if deterministic_violations:
         reasons.append("deterministic_validation_failed")
@@ -63,17 +82,25 @@ def policy_node(state: GraphState) -> dict:
     policy_decisions: list[dict] = [
         {
             "action": action,
-            "risk_level": signals.get("change_type", "new_instance"),
+            "policy_engine_action": action,
+            "canonical_action": "pending",
+            "delivery_action": "pending",
+            "risk_level": risk_level,
             "reasons": reasons,
             "evidence_coverage": evidence_coverage,
             "critic_approved": critic_approved,
             "change_type": change_type,
+            "evolution_gate_passed": evolution_gate_passed,
+            "relation_conflict_count": len(relation_conflicts),
+            "relation_endpoint_failure_count": len(relation_endpoint_failures),
         }
     ]
 
-    # Determine status based on action
+    # A policy action is an authorization, not a completed delivery outcome.
+    # In particular, "publish" must not make an intermediate checkpoint look
+    # published before the canonical commit and run-level publish both finish.
     status_map = {
-        "publish": "published",
+        "publish": "candidate",
         "candidate": "candidate",
         "quarantine": "quarantined",
         "reject": "rejected",
